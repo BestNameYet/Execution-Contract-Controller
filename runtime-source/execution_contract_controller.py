@@ -5,6 +5,7 @@ The model is a bounded semantic service. This script owns contract structure,
 predicate state, dependency admission, scheduling, authorization, evidence
 updates, completion, and impasse routing.
 """
+# Documentation-only publication marker.
 from __future__ import annotations
 
 import hashlib
