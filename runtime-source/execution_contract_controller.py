@@ -21,12 +21,14 @@ INITIALIZATION_SCHEMA = "execution-contract-controller-initialization-v1"
 PAYLOAD_SCHEMA = "execution-contract-controller-payload-v1"
 CONTRACT_SCHEMA = "execution-contract-v1"
 INVOCATION_EVENT_SCHEMA = "chatgpt-controller-invocation-event-v1"
-RECORDING_DIRECTIVE_SCHEMA = "chatgpt-event-recording-directive-v1"
+RECORDING_DIRECTIVE_SCHEMA = "chatgpt-event-recording-instruction-v1"
 RECORDING_SIDECAR_FIELDS = {"recording_event", "recording_instruction"}
 PROJECT_NAME = "Execution Contract Persistence"
 PROJECT_RECORD_FOLDER_ID = "1uTw38OhZZbZVRryd_EaVgkD4Es2sDlKn"
 PROJECT_RECORD_FOLDER_NAME = "Execution Contract Persistence"
-PROJECT_RECORD_FILE_NAME = "execution-contract-persistence-events.jsonl"
+PROJECT_RECORD_SPREADSHEET_ID = "19dQDq76evR4c9BeWyzlA-sY5aUVG9iTnBlgUN4dODmI"
+PROJECT_RECORD_WORKSHEET = "Events"
+PROJECT_RECORD_SHEET_ID = 1930933064
 
 INVOCATION_EVENT_JSON_SCHEMA = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -211,20 +213,136 @@ def invocation_event(
     }
 
 
+def _event_turn_id(event: dict[str, Any]) -> str:
+    invocation = req_dict(event.get("invocation"), "invocation")
+    output = invocation.get("output")
+    if isinstance(output, dict):
+        state = output.get("state")
+        if isinstance(state, dict) and isinstance(state.get("turn_id"), str):
+            return state["turn_id"]
+    input_data = invocation.get("input")
+    if isinstance(input_data, dict):
+        for container_name in ("payload", "semantic_request", "source_request"):
+            container = input_data.get(container_name)
+            if isinstance(container, dict):
+                state = container.get("state")
+                if isinstance(state, dict) and isinstance(state.get("turn_id"), str):
+                    return state["turn_id"]
+    return ""
+
+
+def _event_protocol(event: dict[str, Any]) -> str:
+    invocation = req_dict(event.get("invocation"), "invocation")
+    output = invocation.get("output")
+    if isinstance(output, dict) and isinstance(output.get("protocol"), str):
+        return output["protocol"]
+    input_data = invocation.get("input")
+    if isinstance(input_data, dict):
+        for container_name in ("semantic_request", "payload", "source_request"):
+            container = input_data.get(container_name)
+            if isinstance(container, dict) and isinstance(container.get("protocol"), str):
+                return container["protocol"]
+    return ""
+
+
+def _event_outcome(event: dict[str, Any]) -> str:
+    output = req_dict(req_dict(event.get("invocation"), "invocation").get("output"), "output")
+    if output.get("authority") == "PROTOCOL_ERROR":
+        return "ERROR"
+    if output.get("authority") == "FINAL_RESPONSE" and output.get("directive") in {"COMPLETE", "IMPASSE"}:
+        return str(output["directive"])
+    return "NORMAL"
+
+
+def _duration_ms(event: dict[str, Any]) -> float:
+    started = datetime.fromisoformat(req_text(event.get("timestamp_started"), "timestamp_started").replace("Z", "+00:00"))
+    completed = datetime.fromisoformat(req_text(event.get("timestamp_completed"), "timestamp_completed").replace("Z", "+00:00"))
+    return max(0.0, (completed - started).total_seconds() * 1000.0)
+
+
+def event_row(event: dict[str, Any]) -> list[Any]:
+    invocation = req_dict(event.get("invocation"), "invocation")
+    input_data = invocation.get("input")
+    output_data = invocation.get("output")
+    exception = invocation.get("exception")
+    exception_type = exception.get("type", "") if isinstance(exception, dict) else ""
+    exception_text = exception.get("message", "") if isinstance(exception, dict) else ""
+    input_type = input_data.get("type", "") if isinstance(input_data, dict) else ""
+    authority = output_data.get("authority", "") if isinstance(output_data, dict) else ""
+    return [
+        req_text(event.get("schema"), "event schema"),
+        req_text(event.get("event_id"), "event_id"),
+        req_text(event.get("timestamp_started"), "timestamp_started"),
+        req_text(event.get("timestamp_completed"), "timestamp_completed"),
+        _duration_ms(event),
+        _event_turn_id(event),
+        req_text(req_dict(event.get("source"), "source").get("method"), "source.method"),
+        str(input_type),
+        _event_protocol(event),
+        str(authority),
+        _event_outcome(event),
+        str(exception_type),
+        str(exception_text),
+        canon(input_data),
+        canon(output_data),
+    ]
+
+
+def _sheet_cell(value: Any) -> dict[str, Any]:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return {"userEnteredValue": {"numberValue": value}}
+    return {"userEnteredValue": {"stringValue": str(value)}}
+
+
 def recording_instruction(event: dict[str, Any]) -> dict[str, Any]:
+    row = event_row(event)
+    api_call = {
+        "spreadsheet_id": PROJECT_RECORD_SPREADSHEET_ID,
+        "requests": [
+            {
+                "appendCells": {
+                    "sheetId": PROJECT_RECORD_SHEET_ID,
+                    "rows": [{"values": [_sheet_cell(value) for value in row]}],
+                    "fields": "userEnteredValue",
+                }
+            }
+        ],
+    }
     return {
         "schema": RECORDING_DIRECTIVE_SCHEMA,
-        "action": "APPEND_EVENT",
-        "storage": {
-            "provider": "GOOGLE_DRIVE",
+        "type": "RECORD_EVENT",
+        "operation": "APPEND_EVENT_ROW",
+        "execution_scope": "OUT_OF_BAND",
+        "affects_controller_state": False,
+        "affects_execution_evaluation": False,
+        "must_not_enter_semantic_chain": True,
+        "provider": "GOOGLE_DRIVE",
+        "tool": "Google_Drive.batch_update_spreadsheet",
+        "target": {
             "folder_id": PROJECT_RECORD_FOLDER_ID,
             "folder_name": PROJECT_RECORD_FOLDER_NAME,
-            "record_file_name": PROJECT_RECORD_FILE_NAME,
-            "mode": "APPEND_ONLY",
-            "serialization": "JSONL",
+            "spreadsheet_id": PROJECT_RECORD_SPREADSHEET_ID,
+            "worksheet": PROJECT_RECORD_WORKSHEET,
+            "sheet_id": PROJECT_RECORD_SHEET_ID,
         },
+        "column_schema": [
+            "schema_version", "event_id", "timestamp_started", "timestamp_completed", "duration_ms",
+            "turn_id", "method", "input_type", "protocol", "authority", "outcome",
+            "exception_type", "exception_text", "input_json", "output_json",
+        ],
         "event": deepcopy(event),
-        "instruction": "Append the event as exactly one new JSONL record to the designated project event record before continuing controller execution.",
+        "row": deepcopy(row),
+        "api_call": api_call,
+        "execution_rules": [
+            "This recording operation is out-of-band observability infrastructure and is not part of execution evaluation.",
+            "Invoke Google_Drive.batch_update_spreadsheet exactly once using api_call as its arguments before continuing controller execution.",
+            "Pass api_call verbatim; do not reinterpret, reorder, omit, add, or modify any row value.",
+            "Do not search for the next empty row; appendCells determines the destination.",
+            "Do not overwrite, update, delete, sort, or move existing event rows.",
+            "Do not substitute another spreadsheet, worksheet, or sheetId.",
+            "Do not feed this recording instruction or its result into the controller semantic or execution-evaluation chain.",
+            "After the append call returns, continue with the controller output that accompanied this instruction.",
+        ],
     }
 
 
