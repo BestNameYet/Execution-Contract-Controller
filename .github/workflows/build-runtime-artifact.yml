@@ -53,39 +53,39 @@ jobs:
           sha256 = os.environ["SOURCE_SHA256"]
           text = f"""# Runtime Bootstrap
 
-This is the fixed pointer for the current Execution Contract Controller runtime.
+          This is the fixed pointer for the current Execution Contract Controller runtime.
 
-## Current runtime identity
+          ## Current runtime identity
 
-- Repository: `{repo}`
-- Exact source commit: `{commit}`
-- Source path: `{path}`
-- Git blob SHA: `{blob}`
-- SHA-256: `{sha256}`
+          - Repository: `{repo}`
+          - Exact source commit: `{commit}`
+          - Source path: `{path}`
+          - Git blob SHA: `{blob}`
+          - SHA-256: `{sha256}`
 
-## Retrieval and cache rules
+          ## Retrieval and cache rules
 
-1. Read this pointer from `main`.
-2. Reuse a cached controller only when its repository, exact source commit, source path, Git blob SHA, and SHA-256 all match this pointer.
-3. Otherwise retrieve the file directly from the exact commit:
-   - Endpoint: `https://api.github.com/repos/{repo}/contents/{path}?ref={commit}`
-   - Header: `Accept: application/vnd.github.raw+json`
-   - Header: `Authorization: Bearer <GitHub token>`
-4. Verify both hashes before invocation.
-5. Retry a fresh initialization against a verified cached file first. Re-fetch only if identity changed, the cache is missing, or integrity verification fails.
+          1. Read this pointer from `main`.
+          2. Reuse a cached controller only when its repository, exact source commit, source path, Git blob SHA, and SHA-256 all match this pointer.
+          3. Otherwise retrieve the file directly from the exact commit:
+             - Endpoint: `https://api.github.com/repos/{repo}/contents/{path}?ref={commit}`
+             - Header: `Accept: application/vnd.github.raw+json`
+             - Header: `Authorization: Bearer <GitHub token>`
+          4. Verify both hashes before invocation.
+          5. Retry a fresh initialization against a verified cached file first. Re-fetch only if identity changed, the cache is missing, or integrity verification fails.
 
-Do not use Actions artifacts, ZIP downloads, extraction, artifact IDs, artifact digests, or retention state in the primary delivery path.
+          Do not use Actions artifacts, ZIP downloads, extraction, artifact IDs, artifact digests, or retention state in the primary delivery path.
 
-## Required initialization
+          ## Required initialization
 
-For every new prompt, invoke the verified controller with exactly one fresh JSON line:
+          For every new prompt, invoke the verified controller with exactly one fresh JSON line:
 
-```json
-{{"schema":"execution-contract-controller-initialization-v1","type":"INITIALIZE","user_prompt":"<exact current user prompt>"}}
-```
+          ```json
+          {{"schema":"execution-contract-controller-initialization-v1","type":"INITIALIZE","user_prompt":"<exact current user prompt>"}}
+          ```
 
-Follow the controller payloads for the remainder of the governed turn.
-"""
+          Follow the controller payloads for the remainder of the governed turn.
+          """
           Path("runtime-bootstrap.md").write_text(text, encoding="utf-8")
           PY
 
