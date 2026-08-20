@@ -28,6 +28,16 @@ DEPENDENCY_PROTOCOL = "admit-dependency-v1"
 EVIDENCE_PROTOCOL = "classify-evidence-v1"
 IMPASSE_PROTOCOL = "classify-impasse-v1"
 
+SEMANTIC_OUTPUT_TYPE = "SEMANTIC_OUTPUT"
+SEMANTIC_TRANSPORT_BY_PROTOCOL = {
+    CONTRACT_PROTOCOL: ("CONTRACT_RESULT", "source_request", "contract"),
+    REALIZATION_PROTOCOL: ("REALIZATION_RESULT", "payload", "result"),
+    ADMISSIBILITY_PROTOCOL: ("ADMISSIBILITY_RESULT", "payload", "result"),
+    DEPENDENCY_PROTOCOL: ("DEPENDENCY_RESULT", "payload", "result"),
+    EVIDENCE_PROTOCOL: ("EVIDENCE_RESULT", "payload", "result"),
+    IMPASSE_PROTOCOL: ("IMPASSE_RESULT", "payload", "result"),
+}
+
 RELATIONS = {
     "DIRECTLY_REALIZES_TARGET",
     "DIRECTLY_REALIZES_DEPENDENCY",
@@ -133,6 +143,29 @@ def record(state: dict[str, Any], typ: str, data: dict[str, Any]) -> None:
     state.setdefault("record", []).append({"id": rid("evt"), "time": now(), "type": typ, "data": deepcopy(data)})
 
 
+def semantic_return_protocol() -> dict[str, Any]:
+    return {
+        "type": SEMANTIC_OUTPUT_TYPE,
+        "semantic_request": "return the complete controller-issued SEMANTIC_REQUEST object unchanged",
+        "output": "return only the schema-valid semantic output requested by that SEMANTIC_REQUEST",
+    }
+
+
+def wrap_semantic_output(semantic_request: dict[str, Any], output: dict[str, Any]) -> dict[str, Any]:
+    request = req_dict(semantic_request, "semantic_request")
+    result = req_dict(output, "output")
+    protocol = req_text(request.get("protocol"), "semantic request protocol")
+    spec = SEMANTIC_TRANSPORT_BY_PROTOCOL.get(protocol)
+    if spec is None:
+        raise ValueError(f"unsupported semantic protocol {protocol}")
+    transport_type, request_field, result_field = spec
+    return {
+        "type": transport_type,
+        request_field: request,
+        result_field: result,
+    }
+
+
 def contract_request(prompt: str) -> dict[str, Any]:
     return {
         "schema": PAYLOAD_SCHEMA,
@@ -140,6 +173,7 @@ def contract_request(prompt: str) -> dict[str, Any]:
         "authority": "SEMANTIC_REQUEST",
         "protocol": CONTRACT_PROTOCOL,
         "behavioral_instructions": BEHAVIORAL_INSTRUCTIONS,
+        "return_protocol": semantic_return_protocol(),
         "request": {
             "task": "Compile the exact user instruction into an execution contract. Do not plan execution.",
             "user_prompt": prompt,
@@ -302,7 +336,7 @@ def realization_request(state: dict[str, Any]) -> dict[str, Any]:
     pid, kind = selected
     state["active_target"] = {"predicate_id": pid, "kind": kind}
     record(state, "TARGET_SCHEDULED", state["active_target"])
-    return emit("SEMANTIC_REQUEST", state, protocol=REALIZATION_PROTOCOL, request={
+    return emit("SEMANTIC_REQUEST", state, protocol=REALIZATION_PROTOCOL, return_protocol=semantic_return_protocol(), request={
         "task": "Produce exactly one realization proposal for the scheduled predicate.",
         "scheduled_predicate": descriptor(state, pid, kind),
         "blocked_realizations": deepcopy(state["blocked_realizations"].get(pid, [])),
@@ -320,7 +354,7 @@ def realization_request(state: dict[str, Any]) -> dict[str, Any]:
 
 def admissibility_request(state: dict[str, Any], op: dict[str, Any]) -> dict[str, Any]:
     a = req_dict(state.get("active_target"), "active_target")
-    return emit("SEMANTIC_REQUEST", state, protocol=ADMISSIBILITY_PROTOCOL, pending_operation=op, request={
+    return emit("SEMANTIC_REQUEST", state, protocol=ADMISSIBILITY_PROTOCOL, return_protocol=semantic_return_protocol(), pending_operation=op, request={
         "task": "Classify the proposed operation using only the closed fields.",
         "scheduled_predicate": descriptor(state, a["predicate_id"], a["kind"]),
         "operation": deepcopy(op),
@@ -346,7 +380,7 @@ def admissibility_request(state: dict[str, Any], op: dict[str, Any]) -> dict[str
 
 def dependency_request(state: dict[str, Any], proposal: dict[str, Any]) -> dict[str, Any]:
     a = req_dict(state.get("active_target"), "active_target")
-    return emit("SEMANTIC_REQUEST", state, protocol=DEPENDENCY_PROTOCOL, pending_dependency=proposal, request={
+    return emit("SEMANTIC_REQUEST", state, protocol=DEPENDENCY_PROTOCOL, return_protocol=semantic_return_protocol(), pending_dependency=proposal, request={
         "task": "Determine whether this dependency may enter the execution graph.",
         "scheduled_predicate": descriptor(state, a["predicate_id"], a["kind"]),
         "proposed_dependency": deepcopy(proposal),
@@ -369,7 +403,7 @@ def dependency_request(state: dict[str, Any], proposal: dict[str, Any]) -> dict[
 def impasse_request(state: dict[str, Any], reason: str, claim: dict[str, Any] | None = None) -> dict[str, Any]:
     active = state.get("active_target")
     target = descriptor(state, active["predicate_id"], active["kind"]) if isinstance(active, dict) else None
-    return emit("SEMANTIC_REQUEST", state, protocol=IMPASSE_PROTOCOL, request={
+    return emit("SEMANTIC_REQUEST", state, protocol=IMPASSE_PROTOCOL, return_protocol=semantic_return_protocol(), request={
         "task": "Classify whether a genuine execution impasse exists.",
         "controller_reason": reason,
         "scheduled_predicate": target,
@@ -483,7 +517,7 @@ def evidence_request(task_payload: dict[str, Any], result: dict[str, Any]) -> di
     state = deepcopy(task_payload["state"]); a = req_dict(state.get("active_target"), "active_target")
     ar = {"executed": req_bool(result.get("executed"), "executed"), "succeeded": req_bool(result.get("succeeded"), "succeeded"), "observable_evidence": req_text(result.get("observable_evidence"), "observable_evidence"), "resulting_state": req_text(result.get("resulting_state"), "resulting_state")}
     record(state, "ACTION_RESULT_REPORTED", {"action_id": task_payload.get("action_id"), "predicate_id": a["predicate_id"], "result": deepcopy(ar)})
-    return emit("SEMANTIC_REQUEST", state, protocol=EVIDENCE_PROTOCOL, pending_action_result=ar, pending_operation=deepcopy(task_payload.get("operation")), request={"task": "Classify whether the observable evidence establishes the scheduled predicate.", "scheduled_predicate": descriptor(state, a["predicate_id"], a["kind"]), "action_result": ar, "verdict": sorted(VERDICTS), "invariant_status": [{"id": i["id"], "status": "PRESERVED / VIOLATED / INDETERMINATE"} for i in state["contract"]["invariants"]], "rules": ["Use only observable evidence.", "Tool success is not automatically predicate satisfaction.", "Do not require more than the accepted evidence standard.", "Return JSON only."]})
+    return emit("SEMANTIC_REQUEST", state, protocol=EVIDENCE_PROTOCOL, return_protocol=semantic_return_protocol(), pending_action_result=ar, pending_operation=deepcopy(task_payload.get("operation")), request={"task": "Classify whether the observable evidence establishes the scheduled predicate.", "scheduled_predicate": descriptor(state, a["predicate_id"], a["kind"]), "action_result": ar, "verdict": sorted(VERDICTS), "invariant_status": [{"id": i["id"], "status": "PRESERVED / VIOLATED / INDETERMINATE"} for i in state["contract"]["invariants"]], "rules": ["Use only observable evidence.", "Tool success is not automatically predicate satisfaction.", "Do not require more than the accepted evidence standard.", "Return JSON only."]})
 
 
 def handle_evidence(inp: dict[str, Any]) -> dict[str, Any]:
@@ -530,14 +564,8 @@ def handle_impasse(inp: dict[str, Any]) -> dict[str, Any]:
     return realization_request(state)
 
 
-def dispatch(inp: dict[str, Any]) -> dict[str, Any]:
-    if not isinstance(inp, dict):
-        raise ValueError("input must be an object")
+def dispatch_semantic_transport(inp: dict[str, Any]) -> dict[str, Any]:
     typ = inp.get("type")
-    if typ == "INITIALIZE":
-        if inp.get("schema") != INITIALIZATION_SCHEMA:
-            raise ValueError("invalid initialization schema")
-        return contract_request(req_text(inp.get("user_prompt"), "user_prompt"))
     if typ == "CONTRACT_RESULT":
         return handle_contract(inp)
     if typ == "REALIZATION_RESULT":
@@ -546,15 +574,34 @@ def dispatch(inp: dict[str, Any]) -> dict[str, Any]:
         return handle_admissibility(inp)
     if typ == "DEPENDENCY_RESULT":
         return handle_dependency(inp)
+    if typ == "EVIDENCE_RESULT":
+        return handle_evidence(inp)
+    if typ == "IMPASSE_RESULT":
+        return handle_impasse(inp)
+    raise ValueError("unknown semantic transport type")
+
+
+def handle_semantic_output(inp: dict[str, Any]) -> dict[str, Any]:
+    semantic_request = req_dict(inp.get("semantic_request"), "semantic_request")
+    output = req_dict(inp.get("output"), "output")
+    return dispatch_semantic_transport(wrap_semantic_output(semantic_request, output))
+
+
+def dispatch(inp: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(inp, dict):
+        raise ValueError("input must be an object")
+    typ = inp.get("type")
+    if typ == "INITIALIZE":
+        if inp.get("schema") != INITIALIZATION_SCHEMA:
+            raise ValueError("invalid initialization schema")
+        return contract_request(req_text(inp.get("user_prompt"), "user_prompt"))
+    if typ == SEMANTIC_OUTPUT_TYPE:
+        return handle_semantic_output(inp)
     if typ == "ACTION_RESULT":
         p = verify(req_dict(inp.get("payload"), "payload"))
         if p.get("authority") != "TASK_ACTION":
             raise ValueError("payload is not TASK_ACTION")
         return evidence_request(p, req_dict(inp.get("result"), "result"))
-    if typ == "EVIDENCE_RESULT":
-        return handle_evidence(inp)
-    if typ == "IMPASSE_RESULT":
-        return handle_impasse(inp)
     raise ValueError("unknown input type")
 
 
