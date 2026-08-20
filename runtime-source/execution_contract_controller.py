@@ -37,17 +37,18 @@ SCOPES = {"TRANSITION_ONLY", "PREDICATE_UNATTAINABLE", "TASK_UNATTAINABLE", "UNK
 OP_KINDS = {"READ", "SEARCH", "CALCULATE", "TRANSFORM", "MUTATE", "CREATE", "DELETE", "SEND", "EXECUTE", "WAIT", "OTHER"}
 
 BEHAVIORAL_INSTRUCTIONS = [
-    "This controller is the sole execution orchestrator for the governed turn.",
-    "NO CURRENT PAYLOAD = NO MATERIAL EXECUTION AUTHORITY.",
-    "The accepted execution contract is immutable unless new user input changes the task.",
-    "The controller, not the model, schedules the next unresolved predicate.",
-    "TASK_ACTION authorizes exactly one concrete material operation.",
-    "FINAL_RESPONSE authorizes only the final user-facing response.",
-    "Indirect/support work has no intrinsic legitimacy and must be admitted as a dependency.",
-    "Counterfactual necessity governs indirect work: if omitting it leaves any legitimate path to the scheduled predicate, block it.",
-    "Direct predicate-realizing operations are preferred over indirect work.",
-    "After TASK_ACTION, return observable evidence before any further material action.",
-    "Completion is mechanical: all terminal predicates satisfied means no additional material work may be added.",
+    "Treat the accepted execution contract as the authoritative representation of the current user instruction.",
+    "Respond to each controller request according to its declared protocol and return only the requested structured result.",
+    "For semantic requests, evaluate the supplied contract, predicate, operation, dependency, evidence, or impasse claim in its current execution context; do not substitute an independent plan or redefine the task.",
+    "When a predicate is scheduled, identify a concrete operation that directly realizes that predicate whenever one is legitimately available.",
+    "Do not introduce support work, prerequisites, checks, planning, inspection, validation, clarification, or other intermediate process unless it is explicitly required by the contract or admitted as a necessary dependency.",
+    "Apply counterfactual necessity to indirect work: if omitting a proposed dependency still leaves a legitimate path to the scheduled predicate, classify that dependency as unnecessary.",
+    "Prefer direct realization over indirect preparation whenever both can legitimately reach the scheduled predicate.",
+    "When an operation is authorized, perform exactly that operation and then report the observable result and resulting state for evidence classification before selecting or performing another material operation.",
+    "Classify evidence against the predicate's accepted evidence standard; do not add stronger completion requirements after the contract is accepted.",
+    "Treat completion as satisfaction of the contract's terminal predicates. Once they are satisfied, do not invent additional material work.",
+    "Treat impasse as a property of the remaining contract state, not of a single failed operation; an impasse exists only when no legitimate continuation path remains.",
+    "Preserve contract invariants, authorizations, prohibitions, dependencies, and blocked semantic equivalents throughout execution.",
 ]
 
 
@@ -418,7 +419,7 @@ def handle_realization(inp: dict[str, Any]) -> dict[str, Any]:
         d = req_dict(r.get("dependency"), "dependency")
         return dependency_request(state, {"description": req_text(d.get("description"), "description"), "evidence_standard": req_text(d.get("evidence_standard"), "evidence_standard"), "observed_block": req_text(d.get("observed_block"), "observed_block")})
     if kind == "IMPASSE_CLAIM":
-        return impasse_request(state, "Worker proposed impasse.", req_dict(r.get("claim"), "claim"))
+        return impasse_request(state, "An impasse claim was proposed for the scheduled predicate.", req_dict(r.get("claim"), "claim"))
     raise ValueError("unknown realization kind")
 
 
