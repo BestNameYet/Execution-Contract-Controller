@@ -20,6 +20,44 @@ CONTROL_VERSION = 1
 INITIALIZATION_SCHEMA = "execution-contract-controller-initialization-v1"
 PAYLOAD_SCHEMA = "execution-contract-controller-payload-v1"
 CONTRACT_SCHEMA = "execution-contract-v1"
+INVOCATION_EVENT_SCHEMA = "chatgpt-controller-invocation-event-v1"
+RECORDING_DIRECTIVE_SCHEMA = "chatgpt-event-recording-directive-v1"
+RECORDING_SIDECAR_FIELDS = {"recording_event", "recording_instruction"}
+PROJECT_NAME = "Execution Contract Persistence"
+PROJECT_RECORD_FOLDER_ID = "1uTw38OhZZbZVRryd_EaVgkD4Es2sDlKn"
+PROJECT_RECORD_FOLDER_NAME = "Execution Contract Persistence"
+PROJECT_RECORD_FILE_NAME = "execution-contract-persistence-events.jsonl"
+
+INVOCATION_EVENT_JSON_SCHEMA = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": INVOCATION_EVENT_SCHEMA,
+    "type": "object",
+    "required": ["schema", "event_id", "timestamp_started", "timestamp_completed", "project", "source", "invocation"],
+    "properties": {
+        "schema": {"const": INVOCATION_EVENT_SCHEMA},
+        "event_id": {"type": "string"},
+        "timestamp_started": {"type": "string"},
+        "timestamp_completed": {"type": "string"},
+        "project": {"type": "string"},
+        "source": {
+            "type": "object",
+            "required": ["component", "method"],
+            "properties": {
+                "component": {"type": "string"},
+                "method": {"type": "string"},
+            },
+        },
+        "invocation": {
+            "type": "object",
+            "required": ["input", "output", "exception"],
+            "properties": {
+                "input": {},
+                "output": {},
+                "exception": {"type": ["object", "null"]},
+            },
+        },
+    },
+}
 
 CONTRACT_PROTOCOL = "compile-contract-v1"
 REALIZATION_PROTOCOL = "realize-transition-v1"
@@ -110,7 +148,7 @@ def req_enum(v: Any, allowed: set[str], name: str) -> str:
 
 
 def seal(payload: dict[str, Any]) -> dict[str, Any]:
-    base = {k: v for k, v in payload.items() if k != "payload_sha256"}
+    base = {k: v for k, v in payload.items() if k != "payload_sha256" and k not in RECORDING_SIDECAR_FIELDS}
     payload["payload_sha256"] = digest(base)
     return payload
 
@@ -120,7 +158,7 @@ def verify(payload: dict[str, Any]) -> dict[str, Any]:
     if payload.get("schema") != PAYLOAD_SCHEMA:
         raise ValueError("invalid payload schema")
     expected = payload.get("payload_sha256")
-    base = {k: v for k, v in payload.items() if k != "payload_sha256"}
+    base = {k: v for k, v in payload.items() if k != "payload_sha256" and k not in RECORDING_SIDECAR_FIELDS}
     if not isinstance(expected, str) or digest(base) != expected:
         raise ValueError("payload integrity failure")
     return payload
@@ -143,10 +181,64 @@ def record(state: dict[str, Any], typ: str, data: dict[str, Any]) -> None:
     state.setdefault("record", []).append({"id": rid("evt"), "time": now(), "type": typ, "data": deepcopy(data)})
 
 
+def invocation_event(
+    *,
+    method: str,
+    timestamp_started: str,
+    timestamp_completed: str,
+    input_data: Any,
+    output_data: Any,
+    exception: Exception | None = None,
+) -> dict[str, Any]:
+    return {
+        "schema": INVOCATION_EVENT_SCHEMA,
+        "event_id": rid("invoke"),
+        "timestamp_started": timestamp_started,
+        "timestamp_completed": timestamp_completed,
+        "project": PROJECT_NAME,
+        "source": {
+            "component": "execution_contract_controller.py",
+            "method": method,
+        },
+        "invocation": {
+            "input": deepcopy(input_data),
+            "output": deepcopy(output_data),
+            "exception": None if exception is None else {
+                "type": type(exception).__name__,
+                "message": str(exception),
+            },
+        },
+    }
+
+
+def recording_instruction(event: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema": RECORDING_DIRECTIVE_SCHEMA,
+        "action": "APPEND_EVENT",
+        "storage": {
+            "provider": "GOOGLE_DRIVE",
+            "folder_id": PROJECT_RECORD_FOLDER_ID,
+            "folder_name": PROJECT_RECORD_FOLDER_NAME,
+            "record_file_name": PROJECT_RECORD_FILE_NAME,
+            "mode": "APPEND_ONLY",
+            "serialization": "JSONL",
+        },
+        "event": deepcopy(event),
+        "instruction": "Append the event as exactly one new JSONL record to the designated project event record before continuing controller execution.",
+    }
+
+
+def attach_recording_sidecar(output: dict[str, Any], event: dict[str, Any]) -> dict[str, Any]:
+    out = deepcopy(output)
+    out["recording_event"] = deepcopy(event)
+    out["recording_instruction"] = recording_instruction(event)
+    return out
+
+
 def semantic_return_protocol() -> dict[str, Any]:
     return {
         "type": SEMANTIC_OUTPUT_TYPE,
-        "semantic_request": "return the complete controller-issued SEMANTIC_REQUEST object unchanged",
+        "semantic_request": "return the controller-issued SEMANTIC_REQUEST object unchanged except omit recording_event and recording_instruction sidecar fields",
         "output": "return only the schema-valid semantic output requested by that SEMANTIC_REQUEST",
     }
 
@@ -587,7 +679,7 @@ def handle_semantic_output(inp: dict[str, Any]) -> dict[str, Any]:
     return dispatch_semantic_transport(wrap_semantic_output(semantic_request, output))
 
 
-def dispatch(inp: dict[str, Any]) -> dict[str, Any]:
+def _dispatch(inp: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(inp, dict):
         raise ValueError("input must be an object")
     typ = inp.get("type")
@@ -605,14 +697,46 @@ def dispatch(inp: dict[str, Any]) -> dict[str, Any]:
     raise ValueError("unknown input type")
 
 
+def dispatch(inp: dict[str, Any]) -> dict[str, Any]:
+    timestamp_started = now()
+    try:
+        raw_output = _dispatch(inp)
+        event = invocation_event(
+            method="dispatch",
+            timestamp_started=timestamp_started,
+            timestamp_completed=now(),
+            input_data=inp,
+            output_data=raw_output,
+        )
+        return attach_recording_sidecar(raw_output, event)
+    except Exception as exc:
+        raw_output = {
+            "schema": PAYLOAD_SCHEMA,
+            "control_version": CONTROL_VERSION,
+            "authority": "PROTOCOL_ERROR",
+            "error": str(exc),
+            "error_type": type(exc).__name__,
+        }
+        event = invocation_event(
+            method="dispatch",
+            timestamp_started=timestamp_started,
+            timestamp_completed=now(),
+            input_data=inp,
+            output_data=raw_output,
+            exception=exc,
+        )
+        return attach_recording_sidecar(raw_output, event)
+
+
 def main() -> int:
     line = sys.stdin.readline()
     if not line:
         print(json.dumps({"error": "expected one JSON line on stdin"}))
         return 2
     try:
-        print(json.dumps(dispatch(json.loads(line)), ensure_ascii=False, separators=(",", ":")))
-        return 0
+        output = dispatch(json.loads(line))
+        print(json.dumps(output, ensure_ascii=False, separators=(",", ":")))
+        return 1 if output.get("authority") == "PROTOCOL_ERROR" else 0
     except Exception as exc:
         print(json.dumps({"schema": PAYLOAD_SCHEMA, "control_version": CONTROL_VERSION, "authority": "PROTOCOL_ERROR", "error": str(exc), "error_type": type(exc).__name__}, ensure_ascii=False, separators=(",", ":")))
         return 1
