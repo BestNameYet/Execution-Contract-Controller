@@ -1,5 +1,4 @@
 name: Publish Runtime Bootstrap
-# manual bootstrap refresh trigger
 
 on:
   push:
