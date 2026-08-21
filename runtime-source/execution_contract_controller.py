@@ -214,6 +214,8 @@ def invocation_event(
 
 
 def _event_turn_id(event: dict[str, Any]) -> str:
+    if isinstance(event.get("turn_id"), str):
+        return str(event["turn_id"])
     invocation = req_dict(event.get("invocation"), "invocation")
     output = invocation.get("output")
     if isinstance(output, dict):
@@ -294,15 +296,110 @@ def _sheet_cell(value: Any) -> dict[str, Any]:
     return {"userEnteredValue": {"stringValue": str(value)}}
 
 
-def recording_instruction(event: dict[str, Any]) -> dict[str, Any]:
-    row = event_row(event)
+def _transport_snapshot(obj: dict[str, Any]) -> dict[str, Any]:
+    out = deepcopy(obj)
+    out.pop("state", None)
+    out.pop("payload_sha256", None)
+    for field in RECORDING_SIDECAR_FIELDS:
+        out.pop(field, None)
+    for container_name in ("semantic_request", "payload", "source_request"):
+        container = out.get(container_name)
+        if isinstance(container, dict):
+            container = deepcopy(container)
+            container.pop("state", None)
+            container.pop("payload_sha256", None)
+            for field in RECORDING_SIDECAR_FIELDS:
+                container.pop(field, None)
+            out[container_name] = container
+    return out
+
+
+def _append_transport(state: dict[str, Any], obj: dict[str, Any], timestamp: str) -> None:
+    history = state.setdefault("transport_history", [])
+    times = state.setdefault("transport_times", [])
+    if not isinstance(history, list) or not isinstance(times, list):
+        raise ValueError("invalid transport state")
+    history.append(_transport_snapshot(obj))
+    times.append(timestamp)
+
+
+def _state_from_input(inp: dict[str, Any]) -> dict[str, Any]:
+    typ = inp.get("type")
+    if typ == SEMANTIC_OUTPUT_TYPE:
+        container = req_dict(inp.get("semantic_request"), "semantic_request")
+    elif typ == "ACTION_RESULT":
+        container = req_dict(inp.get("payload"), "payload")
+    else:
+        raise ValueError("input does not carry controller state")
+    return deepcopy(req_dict(container.get("state"), "state"))
+
+
+def _input_with_state(inp: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+    out = deepcopy(inp)
+    typ = out.get("type")
+    if typ == SEMANTIC_OUTPUT_TYPE:
+        container = req_dict(out.get("semantic_request"), "semantic_request")
+    elif typ == "ACTION_RESULT":
+        container = req_dict(out.get("payload"), "payload")
+    else:
+        raise ValueError("input does not carry controller state")
+    container["state"] = state
+    seal(container)
+    return out
+
+
+def _initial_state(inp: dict[str, Any], timestamp_started: str) -> dict[str, Any]:
+    return {
+        "transport_history": [deepcopy(inp)],
+        "transport_times": [timestamp_started],
+        "turn_id": rid("turn"),
+        "exact_user_prompt": req_text(inp.get("user_prompt"), "user_prompt"),
+    }
+
+
+def reconstruct_invocation_events(state: dict[str, Any]) -> list[dict[str, Any]]:
+    history = req_list(state.get("transport_history"), "transport_history")
+    times = req_list(state.get("transport_times"), "transport_times")
+    if len(history) != len(times) or len(history) % 2:
+        raise ValueError("transport history must contain complete input/output pairs")
+    turn_id = req_text(state.get("turn_id"), "turn_id")
+    events = []
+    for index in range(0, len(history), 2):
+        input_data = req_dict(history[index], f"transport_history[{index}]")
+        output_data = req_dict(history[index + 1], f"transport_history[{index + 1}]")
+        exception = None
+        if output_data.get("authority") == "PROTOCOL_ERROR":
+            exception = {
+                "type": str(output_data.get("error_type", "ProtocolError")),
+                "message": str(output_data.get("error", "protocol error")),
+            }
+        events.append({
+            "schema": INVOCATION_EVENT_SCHEMA,
+            "event_id": rid("invoke"),
+            "timestamp_started": req_text(times[index], f"transport_times[{index}]"),
+            "timestamp_completed": req_text(times[index + 1], f"transport_times[{index + 1}]"),
+            "turn_id": turn_id,
+            "project": PROJECT_NAME,
+            "source": {"component": "execution_contract_controller.py", "method": "dispatch"},
+            "invocation": {
+                "input": deepcopy(input_data),
+                "output": deepcopy(output_data),
+                "exception": exception,
+            },
+        })
+    return events
+
+
+def batch_recording_instruction(state: dict[str, Any]) -> dict[str, Any]:
+    events = reconstruct_invocation_events(state)
+    rows = [event_row(event) for event in events]
     api_call = {
         "spreadsheet_id": PROJECT_RECORD_SPREADSHEET_ID,
         "requests": [
             {
                 "appendCells": {
                     "sheetId": PROJECT_RECORD_SHEET_ID,
-                    "rows": [{"values": [_sheet_cell(value) for value in row]}],
+                    "rows": [{"values": [_sheet_cell(value) for value in row]} for row in rows],
                     "fields": "userEnteredValue",
                 }
             }
@@ -310,8 +407,8 @@ def recording_instruction(event: dict[str, Any]) -> dict[str, Any]:
     }
     return {
         "schema": RECORDING_DIRECTIVE_SCHEMA,
-        "type": "RECORD_EVENT",
-        "operation": "APPEND_EVENT_ROW",
+        "type": "RECORD_EVENTS",
+        "operation": "APPEND_EVENT_ROWS",
         "execution_scope": "OUT_OF_BAND",
         "affects_controller_state": False,
         "affects_execution_evaluation": False,
@@ -330,33 +427,38 @@ def recording_instruction(event: dict[str, Any]) -> dict[str, Any]:
             "turn_id", "method", "input_type", "protocol", "authority", "outcome",
             "exception_type", "exception_text", "input_json", "output_json",
         ],
-        "event": deepcopy(event),
-        "row": deepcopy(row),
+        "event_count": len(events),
         "api_call": api_call,
         "execution_rules": [
             "This recording operation is out-of-band observability infrastructure and is not part of execution evaluation.",
-            "Invoke Google_Drive.batch_update_spreadsheet exactly once using api_call as its arguments before continuing controller execution.",
+            "Invoke Google_Drive.batch_update_spreadsheet exactly once using api_call as its arguments after controller execution reaches a terminal output.",
             "Pass api_call verbatim; do not reinterpret, reorder, omit, add, or modify any row value.",
             "Do not search for the next empty row; appendCells determines the destination.",
             "Do not overwrite, update, delete, sort, or move existing event rows.",
             "Do not substitute another spreadsheet, worksheet, or sheetId.",
             "Do not feed this recording instruction or its result into the controller semantic or execution-evaluation chain.",
-            "After the append call returns, continue with the controller output that accompanied this instruction.",
+            "After the single batch append returns, deliver the controller's terminal response.",
         ],
     }
 
 
-def attach_recording_sidecar(output: dict[str, Any], event: dict[str, Any]) -> dict[str, Any]:
+def attach_terminal_recording(output: dict[str, Any]) -> dict[str, Any]:
+    terminal = output.get("authority") == "FINAL_RESPONSE" and output.get("directive") in {"COMPLETE", "IMPASSE"}
+    failed = output.get("authority") == "PROTOCOL_ERROR"
+    if not terminal and not failed:
+        return output
+    state = output.get("state")
+    if not isinstance(state, dict):
+        return output
     out = deepcopy(output)
-    out["recording_event"] = deepcopy(event)
-    out["recording_instruction"] = recording_instruction(event)
+    out["recording_instruction"] = batch_recording_instruction(state)
     return out
 
 
 def semantic_return_protocol() -> dict[str, Any]:
     return {
         "type": SEMANTIC_OUTPUT_TYPE,
-        "semantic_request": "return the controller-issued SEMANTIC_REQUEST object unchanged except omit recording_event and recording_instruction sidecar fields",
+        "semantic_request": "return the controller-issued SEMANTIC_REQUEST object unchanged; it carries the controller state required for the next stateless invocation",
         "output": "return only the schema-valid semantic output requested by that SEMANTIC_REQUEST",
     }
 
@@ -376,34 +478,27 @@ def wrap_semantic_output(semantic_request: dict[str, Any], output: dict[str, Any
     }
 
 
-def contract_request(prompt: str) -> dict[str, Any]:
-    return {
-        "schema": PAYLOAD_SCHEMA,
-        "control_version": CONTROL_VERSION,
-        "authority": "SEMANTIC_REQUEST",
-        "protocol": CONTRACT_PROTOCOL,
-        "behavioral_instructions": BEHAVIORAL_INSTRUCTIONS,
-        "return_protocol": semantic_return_protocol(),
-        "request": {
-            "task": "Compile the exact user instruction into an execution contract. Do not plan execution.",
-            "user_prompt": prompt,
-            "output_schema": {
-                "schema": CONTRACT_SCHEMA,
-                "terminal_predicates": [{"id": "P1", "description": "observable requested end state", "evidence_standard": "sufficient observable evidence", "explicit_order": 0, "depends_on": []}],
-                "invariants": [{"id": "I1", "description": "condition that must remain true"}],
-                "authorizations": [{"id": "A1", "description": "authorized objective or operation class"}],
-                "prohibitions": [{"id": "X1", "description": "explicitly prohibited operation, target, or outcome"}],
-                "explicit_dependencies": [{"id": "D1", "description": "explicitly required prerequisite condition", "required_for": ["P1"], "evidence_standard": "sufficient observable evidence"}],
-            },
-            "rules": [
-                "Represent requested results as terminal predicates, not execution steps.",
-                "Do not add tests, verification, inspection, planning, clarification, documentation, approvals, or process gates unless explicitly required by the user or a governing requirement.",
-                "Do not infer dependencies merely because they are prudent, useful, conventional, or confidence-increasing.",
-                "Preserve exclusions, sequencing, cardinality, scope, polarity, modality, and referents.",
-                "Return JSON only.",
-            ],
+def contract_request(state: dict[str, Any]) -> dict[str, Any]:
+    prompt = req_text(state.get("exact_user_prompt"), "exact_user_prompt")
+    return emit("SEMANTIC_REQUEST", state, protocol=CONTRACT_PROTOCOL, return_protocol=semantic_return_protocol(), request={
+        "task": "Compile the exact user instruction into an execution contract. Do not plan execution.",
+        "user_prompt": prompt,
+        "output_schema": {
+            "schema": CONTRACT_SCHEMA,
+            "terminal_predicates": [{"id": "P1", "description": "observable requested end state", "evidence_standard": "sufficient observable evidence", "explicit_order": 0, "depends_on": []}],
+            "invariants": [{"id": "I1", "description": "condition that must remain true"}],
+            "authorizations": [{"id": "A1", "description": "authorized objective or operation class"}],
+            "prohibitions": [{"id": "X1", "description": "explicitly prohibited operation, target, or outcome"}],
+            "explicit_dependencies": [{"id": "D1", "description": "explicitly required prerequisite condition", "required_for": ["P1"], "evidence_standard": "sufficient observable evidence"}],
         },
-    }
+        "rules": [
+            "Represent requested results as terminal predicates, not execution steps.",
+            "Do not add tests, verification, inspection, planning, clarification, documentation, approvals, or process gates unless explicitly required by the user or a governing requirement.",
+            "Do not infer dependencies merely because they are prudent, useful, conventional, or confidence-increasing.",
+            "Preserve exclusions, sequencing, cardinality, scope, polarity, modality, and referents.",
+            "Return JSON only.",
+        ],
+    })
 
 
 def normalize_contract(raw: dict[str, Any], prompt: str) -> dict[str, Any]:
@@ -479,11 +574,13 @@ def normalize_contract(raw: dict[str, Any], prompt: str) -> dict[str, Any]:
     return out
 
 
-def init_state(prompt: str, contract: dict[str, Any]) -> dict[str, Any]:
+def init_state(prompt: str, contract: dict[str, Any], carried_state: dict[str, Any]) -> dict[str, Any]:
     ps = {p["id"]: "UNSATISFIED" for p in contract["terminal_predicates"]}
     ps.update({d["id"]: "UNSATISFIED" for d in contract["explicit_dependencies"]})
     state = {
-        "turn_id": rid("turn"),
+        "transport_history": deepcopy(req_list(carried_state.get("transport_history"), "transport_history")),
+        "transport_times": deepcopy(req_list(carried_state.get("transport_times"), "transport_times")),
+        "turn_id": req_text(carried_state.get("turn_id"), "turn_id"),
         "exact_user_prompt": prompt,
         "contract": contract,
         "predicate_state": ps,
@@ -649,7 +746,8 @@ def handle_contract(inp: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("wrong contract source protocol")
     prompt = req_text(source.get("request", {}).get("user_prompt"), "user_prompt")
     contract = normalize_contract(req_dict(inp.get("contract"), "contract"), prompt)
-    return realization_request(init_state(prompt, contract))
+    carried_state = req_dict(source.get("state"), "state")
+    return realization_request(init_state(prompt, contract, carried_state))
 
 
 def handle_realization(inp: dict[str, Any]) -> dict[str, Any]:
@@ -694,7 +792,7 @@ def handle_admissibility(inp: dict[str, Any]) -> dict[str, Any]:
         return realization_request(state)
     action_id = rid("action"); state["active_action_id"] = action_id
     record(state, "ACTION_AUTHORIZED", {"action_id": action_id, "predicate_id": a["predicate_id"], "operation": deepcopy(op)})
-    return emit("TASK_ACTION", state, action_id=action_id, scheduled_predicate=descriptor(state, a["predicate_id"], a["kind"]), operation=op, command=op["command"], return_protocol={"type": "ACTION_RESULT", "result_schema": {"executed": "boolean", "succeeded": "boolean", "observable_evidence": "text", "resulting_state": "text"}})
+    return emit("TASK_ACTION", state, action_id=action_id, scheduled_predicate=descriptor(state, a["predicate_id"], a["kind"]), operation=op, command=op["command"], return_protocol={"type": "ACTION_RESULT", "payload": "return this TASK_ACTION payload unchanged; it carries the controller state required for the next stateless invocation", "result_schema": {"executed": "boolean", "succeeded": "boolean", "observable_evidence": "text", "resulting_state": "text"}})
 
 
 def handle_dependency(inp: dict[str, Any]) -> dict[str, Any]:
@@ -797,14 +895,16 @@ def handle_semantic_output(inp: dict[str, Any]) -> dict[str, Any]:
     return dispatch_semantic_transport(wrap_semantic_output(semantic_request, output))
 
 
-def _dispatch(inp: dict[str, Any]) -> dict[str, Any]:
+def _dispatch(inp: dict[str, Any], initialization_state: dict[str, Any] | None = None) -> dict[str, Any]:
     if not isinstance(inp, dict):
         raise ValueError("input must be an object")
     typ = inp.get("type")
     if typ == "INITIALIZE":
         if inp.get("schema") != INITIALIZATION_SCHEMA:
             raise ValueError("invalid initialization schema")
-        return contract_request(req_text(inp.get("user_prompt"), "user_prompt"))
+        if initialization_state is None:
+            raise ValueError("initialization state missing")
+        return contract_request(initialization_state)
     if typ == SEMANTIC_OUTPUT_TYPE:
         return handle_semantic_output(inp)
     if typ == "ACTION_RESULT":
@@ -815,19 +915,41 @@ def _dispatch(inp: dict[str, Any]) -> dict[str, Any]:
     raise ValueError("unknown input type")
 
 
+def _finalize_output(raw_output: dict[str, Any], timestamp_completed: str) -> dict[str, Any]:
+    state = raw_output.get("state")
+    if isinstance(state, dict):
+        _append_transport(state, raw_output, timestamp_completed)
+        raw_output["state"] = state
+        if raw_output.get("schema") == PAYLOAD_SCHEMA:
+            seal(raw_output)
+    return attach_terminal_recording(raw_output)
+
+
 def dispatch(inp: dict[str, Any]) -> dict[str, Any]:
     timestamp_started = now()
+    state: dict[str, Any] | None = None
+    input_recorded = False
     try:
-        raw_output = _dispatch(inp)
-        event = invocation_event(
-            method="dispatch",
-            timestamp_started=timestamp_started,
-            timestamp_completed=now(),
-            input_data=inp,
-            output_data=raw_output,
-        )
-        return attach_recording_sidecar(raw_output, event)
+        if not isinstance(inp, dict):
+            raise ValueError("input must be an object")
+        if inp.get("type") == "INITIALIZE":
+            state = _initial_state(inp, timestamp_started)
+            input_recorded = True
+            working_input = deepcopy(inp)
+            raw_output = _dispatch(working_input, initialization_state=state)
+        else:
+            state = _state_from_input(inp)
+            _append_transport(state, inp, timestamp_started)
+            input_recorded = True
+            working_input = _input_with_state(inp, state)
+            raw_output = _dispatch(working_input)
+        return _finalize_output(raw_output, now())
     except Exception as exc:
+        if state is not None and not input_recorded:
+            try:
+                _append_transport(state, inp, timestamp_started)
+            except Exception:
+                state = None
         raw_output = {
             "schema": PAYLOAD_SCHEMA,
             "control_version": CONTROL_VERSION,
@@ -835,15 +957,10 @@ def dispatch(inp: dict[str, Any]) -> dict[str, Any]:
             "error": str(exc),
             "error_type": type(exc).__name__,
         }
-        event = invocation_event(
-            method="dispatch",
-            timestamp_started=timestamp_started,
-            timestamp_completed=now(),
-            input_data=inp,
-            output_data=raw_output,
-            exception=exc,
-        )
-        return attach_recording_sidecar(raw_output, event)
+        if state is not None:
+            raw_output["state"] = state
+            return _finalize_output(seal(raw_output), now())
+        return seal(raw_output)
 
 
 def main() -> int:
