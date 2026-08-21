@@ -1,0 +1,132 @@
+            "PREDICATE_UNATTAINABLE": "The currently scheduled predicate itself has no legitimate attainable path under the supplied context.",
+            "TASK_UNATTAINABLE": "The remaining execution contract as a whole has no legitimate attainable completion path.",
+            "UNKNOWN": "The available facts do not establish the scope of unattainability.",
+        }),
+    })
+
+
+def contract_output_schema() -> dict[str, Any]:
+    terminal_item = object_field("One observable end state explicitly requested by the user.", {
+        "id": text_field("A unique stable identifier for this terminal predicate within the contract, such as P1."),
+        "description": text_field("The observable requested end state, expressed as a condition that can become true or false."),
+        "evidence_standard": text_field("The minimum observable evidence sufficient to establish that this terminal predicate is satisfied."),
+        "explicit_order": integer_field("The zero-based order explicitly required by the user; use source order when no stronger ordering is stated."),
+        "depends_on": array_field("Identifiers of dependencies explicitly required before this terminal predicate; use an empty array when none are explicit.", text_field("An exact dependency identifier declared in explicit_dependencies.")),
+    })
+    invariant_item = object_field("One condition that must remain true throughout execution.", {
+        "id": text_field("A unique stable identifier for this invariant, such as I1."),
+        "description": text_field("The condition that must remain true throughout execution."),
+    })
+    authorization_item = object_field("One user-authorized objective or operation class.", {
+        "id": text_field("A unique stable identifier for this authorization, such as A1."),
+        "description": text_field("The objective, scope, target, or operation class the user has authorized."),
+    })
+    prohibition_item = object_field("One explicitly prohibited operation, target, or outcome.", {
+        "id": text_field("A unique stable identifier for this prohibition, such as X1."),
+        "description": text_field("The operation, target, outcome, or scope that must not occur."),
+    })
+    dependency_item = object_field("One prerequisite condition explicitly required by the user or governing instruction.", {
+        "id": text_field("A unique stable identifier for this explicit dependency, such as D1."),
+        "description": text_field("The prerequisite condition that must become true before the listed terminal predicates can legitimately be realized."),
+        "required_for": array_field("Terminal predicate identifiers for which this dependency is explicitly required.", text_field("An exact terminal predicate identifier declared in terminal_predicates.")),
+        "evidence_standard": text_field("The minimum observable evidence sufficient to establish that this dependency is satisfied."),
+    })
+    return object_field("Execution contract compiled from the exact current user instruction. Return every top-level field.", {
+        "schema": enum_field("The contract schema identifier.", {CONTRACT_SCHEMA: "The only accepted execution-contract schema for this controller version."}),
+        "terminal_predicates": array_field("All observable end states explicitly requested by the user; at least one is required.", terminal_item),
+        "invariants": array_field("All conditions that the user or governing instruction requires to remain true during execution; use an empty array when none exist.", invariant_item),
+        "authorizations": array_field("All explicitly authorized objectives, scopes, targets, or operation classes; use an empty array when none are separately stated.", authorization_item),
+        "prohibitions": array_field("All explicitly prohibited operations, targets, outcomes, or scopes; use an empty array when none exist.", prohibition_item),
+        "explicit_dependencies": array_field("Only prerequisite conditions explicitly required by the user or governing instruction; use an empty array when none exist.", dependency_item),
+    })
+
+
+def action_result_schema() -> dict[str, Any]:
+    return object_field("Observable report of the one authorized material operation after it has been attempted.", {
+        "executed": boolean_field(
+            "Whether the authorized operation was actually attempted.",
+            "The operation was actually attempted.",
+            "The operation was not attempted.",
+        ),
+        "succeeded": boolean_field(
+            "Whether the attempted operation completed successfully according to the executing tool or environment.",
+            "The attempted operation reported successful completion.",
+            "The operation failed, was rejected, or did not complete successfully.",
+        ),
+        "observable_evidence": text_field("Concrete observable evidence produced by or after the operation that is relevant to the scheduled predicate."),
+        "resulting_state": text_field("A concise description of the externally observable state after the operation attempt."),
+    })
+
+
+def semantic_return_protocol() -> dict[str, Any]:
+    return {
+        "type": SEMANTIC_OUTPUT_TYPE,
+        "semantic_request": "return the controller-issued SEMANTIC_REQUEST object unchanged; it carries the controller state required for the next stateless invocation",
+        "output": "return only the values required by the fully defined output_schema in that SEMANTIC_REQUEST",
+    }
+
+
+def invocation_event(*, method: str, timestamp_started: str, timestamp_completed: str, input_data: Any, output_data: Any, exception: Exception | None = None) -> dict[str, Any]:
+    return {
+        "schema": INVOCATION_EVENT_SCHEMA,
+        "event_id": rid("invoke"),
+        "timestamp_started": timestamp_started,
+        "timestamp_completed": timestamp_completed,
+        "project": PROJECT_NAME,
+        "source": {"component": "execution_contract_controller.py", "method": method},
+        "invocation": {
+            "input": deepcopy(input_data),
+            "output": deepcopy(output_data),
+            "exception": None if exception is None else {"type": type(exception).__name__, "message": str(exception)},
+        },
+    }
+
+
+def _event_turn_id(event: dict[str, Any]) -> str:
+    if isinstance(event.get("turn_id"), str):
+        return str(event["turn_id"])
+    invocation = req_dict(event.get("invocation"), "invocation")
+    output = invocation.get("output")
+    if isinstance(output, dict):
+        state = output.get("state")
+        if isinstance(state, dict) and isinstance(state.get("turn_id"), str):
+            return state["turn_id"]
+    input_data = invocation.get("input")
+    if isinstance(input_data, dict):
+        for container_name in ("payload", "semantic_request", "source_request"):
+            container = input_data.get(container_name)
+            if isinstance(container, dict):
+                state = container.get("state")
+                if isinstance(state, dict) and isinstance(state.get("turn_id"), str):
+                    return state["turn_id"]
+    return ""
+
+
+def _event_protocol(event: dict[str, Any]) -> str:
+    invocation = req_dict(event.get("invocation"), "invocation")
+    output = invocation.get("output")
+    if isinstance(output, dict) and isinstance(output.get("protocol"), str):
+        return output["protocol"]
+    input_data = invocation.get("input")
+    if isinstance(input_data, dict):
+        for container_name in ("semantic_request", "payload", "source_request"):
+            container = input_data.get(container_name)
+            if isinstance(container, dict) and isinstance(container.get("protocol"), str):
+                return container["protocol"]
+    return ""
+
+
+def _event_outcome(event: dict[str, Any]) -> str:
+    output = req_dict(req_dict(event.get("invocation"), "invocation").get("output"), "output")
+    if output.get("authority") == "PROTOCOL_ERROR":
+        return "ERROR"
+    if output.get("authority") == "FINAL_RESPONSE" and output.get("directive") in {"COMPLETE", "IMPASSE"}:
+        return str(output["directive"])
+    return "NORMAL"
+
+
+def _duration_ms(event: dict[str, Any]) -> float:
+    started = datetime.fromisoformat(req_text(event.get("timestamp_started"), "timestamp_started").replace("Z", "+00:00"))
+    completed = datetime.fromisoformat(req_text(event.get("timestamp_completed"), "timestamp_completed").replace("Z", "+00:00"))
+    return max(0.0, (completed - started).total_seconds() * 1000.0)
+
