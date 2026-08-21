@@ -67,6 +67,24 @@ BEHAVIORAL_INSTRUCTIONS = [
     "Preserve contract invariants, authorizations, prohibitions, dependencies, and blocked semantic equivalents throughout execution.",
 ]
 
+INDIRECT_WORK_DEFINITION = {
+    "definition": "Indirect work is any operation whose immediate successful result does not itself establish the currently scheduled predicate, but instead prepares for, enables, investigates, validates, locates, plans, configures, translates for, administers, or increases confidence in a later material operation that could establish it. An operation is indirect when another material operation must still occur after it before the scheduled predicate can become true.",
+    "decisive_test": "Ask: if this operation succeeds completely, is the scheduled predicate itself now true? If yes, the operation may be direct. If no and another material operation is still required, the operation is indirect.",
+    "categories": [
+        {"name": "PREPARATION", "definition": "Setup, staging, formatting, organizing, pre-processing, creating scaffolding, or arranging resources for a later action."},
+        {"name": "INSPECTION", "definition": "Reading, checking, reviewing, examining, enumerating, or measuring something when the inspection itself does not satisfy the scheduled predicate."},
+        {"name": "SEARCH_OR_DISCOVERY", "definition": "Locating a file, source, record, tool, resource, or candidate when finding it is only a precursor to the requested result."},
+        {"name": "PLANNING", "definition": "Deciding, decomposing, outlining, designing a procedure, selecting an approach, or generating next steps rather than performing the realizing operation."},
+        {"name": "VERIFICATION_OR_VALIDATION", "definition": "Testing, confirming, rechecking, comparing, auditing, or proving something when that verification is not itself part of the requested terminal result."},
+        {"name": "CONFIGURATION_OR_SETUP", "definition": "Installing, configuring, authenticating, initializing, creating temporary infrastructure, or changing environment state solely to enable later work."},
+        {"name": "REPRESENTATION_TRANSLATION", "definition": "Converting or packaging information solely so that a later material operation can use it."},
+        {"name": "CONFIDENCE_INCREASING", "definition": "Collecting additional evidence, redundancy, cross-checking, or corroboration when sufficient information already exists to perform a legitimate direct realization."},
+        {"name": "ADMINISTRATIVE_OR_PROCESS", "definition": "Creating branches, pull requests, tickets, drafts, approvals, checkpoints, backups, or documentation when these are not themselves required by the user or an admitted dependency."},
+        {"name": "TOOL_ENABLING", "definition": "Acquiring or preparing a tool, connector, file, runtime, or execution environment solely so another operation can later realize the predicate."},
+    ],
+    "dependency_exception": "Indirect work is not automatically forbidden. It is legitimate only when the condition it realizes is already an admitted dependency, or when dependency admission establishes that no legitimate path to the scheduled predicate remains without that condition. Indirect work must not be represented as direct realization.",
+}
+
 # Every static string literal in this exact controller source receives a compact
 # token in carried transport history. Dynamic user/model/tool text stays literal.
 TRANSPORT_TOKEN_PREFIX = "~"
@@ -291,15 +309,19 @@ def operation_output_schema() -> dict[str, Any]:
 
 
 def realization_output_schema() -> dict[str, Any]:
-    return object_field("One realization proposal for the currently scheduled predicate.", {
+    return object_field("One realization proposal for the currently scheduled predicate. When kind is OPERATION, operation and classification are both required and classification must describe that exact operation.", {
         "kind": enum_field("Which realization form the response uses.", {
-            "OPERATION": "A concrete material operation is available that is proposed as the next realization attempt.",
+            "OPERATION": "A concrete material operation is available and is proposed together with its complete admissibility classification in this same response.",
             "DEPENDENCY_PROPOSAL": "A currently false condition is claimed to be genuinely necessary before the scheduled predicate can be realized.",
             "IMPASSE_CLAIM": "No legitimate continuation path to the scheduled predicate is claimed to remain.",
         }),
         "operation": {
             **operation_output_schema(),
             "definition": "Required when kind is OPERATION; omit otherwise. " + operation_output_schema()["definition"],
+        },
+        "classification": {
+            **admissibility_output_schema(),
+            "definition": "Required when kind is OPERATION; omit otherwise. Classify the exact operation returned in operation against every supplied requirement before the deterministic controller decides whether to authorize it.",
         },
         "dependency": object_field("Required when kind is DEPENDENCY_PROPOSAL; omit otherwise. The proposed necessary condition and evidence basis.", {
             "description": text_field("The condition that is claimed to have to become true before the scheduled predicate can legitimately be realized."),
@@ -310,7 +332,6 @@ def realization_output_schema() -> dict[str, Any]:
             "description": text_field("A concise description of the claimed execution impasse grounded in observed facts."),
         }),
     })
-
 
 def admissibility_output_schema() -> dict[str, Any]:
     return object_field("Closed semantic classification of the proposed operation. Return every field.", {
@@ -926,6 +947,52 @@ def decision_context(state: dict[str, Any], pid: str, kind: str) -> dict[str, An
     }
 
 
+def operation_selection_requirements(state: dict[str, Any], pid: str, kind: str) -> dict[str, Any]:
+    expected_relationship = "DIRECTLY_REALIZES_TARGET" if kind == "TERMINAL" else "DIRECTLY_REALIZES_DEPENDENCY"
+    relationship_definition = next(
+        item["definition"] for item in relationship_field()["values"] if item["value"] == expected_relationship
+    )
+    return {
+        "definition": "Requirements that govern selection of an OPERATION. Apply these before choosing the operation and classify the same chosen operation against them in the same semantic response.",
+        "direct_realization": {
+            "definition": "The operation must itself realize the currently scheduled state rather than merely enable later work.",
+            "required_relationship": expected_relationship,
+            "required_relationship_definition": relationship_definition,
+        },
+        "invariants": {
+            "definition": "Every listed invariant must remain true. The selected operation and its immediate expected effect must not violate any listed invariant.",
+            "items": [{**deepcopy(item), "requirement": "MUST_NOT_BE_VIOLATED_BY_OPERATION_OR_IMMEDIATE_EFFECT"} for item in state["contract"]["invariants"]],
+        },
+        "authorizations": {
+            "definition": "The selected operation must remain within the user's authorized objective, scope, targets, and operation classes represented here.",
+            "items": [{**deepcopy(item), "requirement": "OPERATION_MUST_REMAIN_WITHIN_AUTHORIZED_OBJECTIVE"} for item in state["contract"]["authorizations"]],
+        },
+        "prohibitions": {
+            "definition": "The selected operation and its immediate expected outcome must not match any listed prohibition.",
+            "items": [{**deepcopy(item), "requirement": "OPERATION_AND_IMMEDIATE_OUTCOME_MUST_NOT_MATCH"} for item in state["contract"]["prohibitions"]],
+        },
+        "dependencies": {
+            "definition": "Only admitted dependencies may constrain direct realization. Do not invent or silently require additional prerequisites.",
+            "items": [
+                {**deepcopy(dep), "status": state["predicate_state"].get(dep["id"], "UNSATISFIED"), "requirement": "DO_NOT_INTRODUCE_ANY_UNADMITTED_PREREQUISITE"}
+                for dep in state["contract"]["explicit_dependencies"] + state.get("dynamic_dependencies", [])
+            ],
+        },
+        "blocked_realizations": {
+            "definition": "Do not select a realization already blocked for this predicate or a contextual semantic equivalent of one.",
+            "items": deepcopy(state["blocked_realizations"].get(pid, [])),
+        },
+        "no_hidden_followup": {
+            "definition": "The selected operation must be capable, when successful, of producing its stated expected observable effect without another material operation having to occur first.",
+            "requirement": "NO_ADDITIONAL_MATERIAL_ACTION_REQUIRED_BEFORE_STATED_EFFECT",
+        },
+        "indirect_work": deepcopy(INDIRECT_WORK_DEFINITION),
+        "same_response_classification": {
+            "definition": "When kind is OPERATION, return the operation and the complete classification of that exact operation in this same response. Do not wait for a second admissibility request and do not revise the operation after classifying it.",
+            "requirement": "OPERATION_AND_CLASSIFICATION_RETURNED_TOGETHER",
+        },
+    }
+
 def realization_request(state: dict[str, Any]) -> dict[str, Any]:
     if all_done(state):
         record(state, "TASK_COMPLETE", {"predicate_state": deepcopy(state["predicate_state"])})
@@ -937,18 +1004,20 @@ def realization_request(state: dict[str, Any]) -> dict[str, Any]:
     state["active_target"] = {"predicate_id": pid, "kind": kind}
     record(state, "TARGET_SCHEDULED", state["active_target"])
     return emit("SEMANTIC_REQUEST", state, protocol=REALIZATION_PROTOCOL, return_protocol=semantic_return_protocol(), request={
-        "task": "Produce exactly one realization proposal for the scheduled predicate.",
+        "task": "Select exactly one realization for the scheduled predicate. If kind is OPERATION, select one operation that satisfies the supplied operation_selection_requirements if such an operation exists and classify that exact operation against every closed classification field in the same response.",
         "decision_context": decision_context(state, pid, kind),
+        "operation_selection_requirements": operation_selection_requirements(state, pid, kind),
         "output_schema": realization_output_schema(),
         "rules": [
-            "Use only the supplied decision_context for the current semantic decision.",
-            "If a direct operation can realize the scheduled predicate, propose it.",
-            "Do not submit indirect/support work as OPERATION; use DEPENDENCY_PROPOSAL.",
+            "Use only the supplied decision_context and operation_selection_requirements for the current semantic decision.",
+            "Apply all operation-selection requirements before choosing an OPERATION; do not first choose an operation and only later test whether it was permissible.",
+            "If a direct compliant operation can realize the scheduled predicate, return it with its classification in this same response.",
+            "Apply the complete indirect_work definition and decisive test supplied in operation_selection_requirements. Indirect work must not be returned as direct OPERATION realization.",
             "Before proposing a dependency, apply the counterfactual: if omitting it leaves any legitimate path to the scheduled predicate, do not propose it.",
+            "When kind is OPERATION, classification must describe the exact operation field in this response and every classification field is required.",
             "Return JSON only, using exactly the fields and values defined in output_schema.",
         ],
     })
-
 
 def admissibility_request(state: dict[str, Any], op: dict[str, Any]) -> dict[str, Any]:
     a = req_dict(state.get("active_target"), "active_target")
@@ -1036,33 +1105,7 @@ def handle_contract(inp: dict[str, Any]) -> dict[str, Any]:
     return realization_request(init_state(prompt, contract, carried_state))
 
 
-def handle_realization(inp: dict[str, Any]) -> dict[str, Any]:
-    p = verify(req_dict(inp.get("payload"), "payload"))
-    state = deepcopy(p["state"])
-    if p.get("protocol") != REALIZATION_PROTOCOL:
-        raise ValueError("wrong protocol")
-    r = req_dict(inp.get("result"), "result")
-    kind = req_text(r.get("kind"), "kind")
-    if kind == "OPERATION":
-        return admissibility_request(state, normalize_operation(req_dict(r.get("operation"), "operation")))
-    if kind == "DEPENDENCY_PROPOSAL":
-        d = req_dict(r.get("dependency"), "dependency")
-        return dependency_request(state, {
-            "description": req_text(d.get("description"), "description"),
-            "evidence_standard": req_text(d.get("evidence_standard"), "evidence_standard"),
-            "observed_block": req_text(d.get("observed_block"), "observed_block"),
-        })
-    if kind == "IMPASSE_CLAIM":
-        return impasse_request(state, "An impasse claim was proposed for the scheduled predicate.", req_dict(r.get("claim"), "claim"))
-    raise ValueError("unknown realization kind")
-
-
-def handle_admissibility(inp: dict[str, Any]) -> dict[str, Any]:
-    p = verify(req_dict(inp.get("payload"), "payload"))
-    state = deepcopy(p["state"])
-    if p.get("protocol") != ADMISSIBILITY_PROTOCOL:
-        raise ValueError("wrong protocol")
-    r = req_dict(inp.get("result"), "result")
+def _authorize_classified_operation(state: dict[str, Any], op: dict[str, Any], r: dict[str, Any]) -> dict[str, Any]:
     a = req_dict(state.get("active_target"), "active_target")
     relationship = req_enum(r.get("relationship"), RELATIONS, "relationship")
     flags = [req_bool(r.get(k), k) for k in (
@@ -1076,7 +1119,6 @@ def handle_admissibility(inp: dict[str, Any]) -> dict[str, Any]:
     is_indirect = req_bool(r.get("is_indirect_or_support_operation"), "is_indirect_or_support_operation")
     path_remains = req_bool(r.get("legitimate_path_to_scheduled_predicate_remains_if_operation_is_omitted"), "counterfactual path")
     expected = "DIRECTLY_REALIZES_TARGET" if a["kind"] == "TERMINAL" else "DIRECTLY_REALIZES_DEPENDENCY"
-    op = req_dict(p.get("pending_operation"), "pending_operation")
     admissible = relationship == expected and not any(flags) and not is_indirect
     record(state, "ADMISSIBILITY_CLASSIFIED", {
         "predicate_id": a["predicate_id"],
@@ -1108,6 +1150,36 @@ def handle_admissibility(inp: dict[str, Any]) -> dict[str, Any]:
         },
     )
 
+
+def handle_realization(inp: dict[str, Any]) -> dict[str, Any]:
+    p = verify(req_dict(inp.get("payload"), "payload"))
+    state = deepcopy(p["state"])
+    if p.get("protocol") != REALIZATION_PROTOCOL:
+        raise ValueError("wrong protocol")
+    r = req_dict(inp.get("result"), "result")
+    kind = req_text(r.get("kind"), "kind")
+    if kind == "OPERATION":
+        op = normalize_operation(req_dict(r.get("operation"), "operation"))
+        classification = req_dict(r.get("classification"), "classification")
+        return _authorize_classified_operation(state, op, classification)
+    if kind == "DEPENDENCY_PROPOSAL":
+        d = req_dict(r.get("dependency"), "dependency")
+        return dependency_request(state, {
+            "description": req_text(d.get("description"), "description"),
+            "evidence_standard": req_text(d.get("evidence_standard"), "evidence_standard"),
+            "observed_block": req_text(d.get("observed_block"), "observed_block"),
+        })
+    if kind == "IMPASSE_CLAIM":
+        return impasse_request(state, "An impasse claim was proposed for the scheduled predicate.", req_dict(r.get("claim"), "claim"))
+    raise ValueError("unknown realization kind")
+
+def handle_admissibility(inp: dict[str, Any]) -> dict[str, Any]:
+    p = verify(req_dict(inp.get("payload"), "payload"))
+    state = deepcopy(p["state"])
+    if p.get("protocol") != ADMISSIBILITY_PROTOCOL:
+        raise ValueError("wrong protocol")
+    op = req_dict(p.get("pending_operation"), "pending_operation")
+    return _authorize_classified_operation(state, op, req_dict(inp.get("result"), "result"))
 
 def handle_dependency(inp: dict[str, Any]) -> dict[str, Any]:
     p = verify(req_dict(inp.get("payload"), "payload"))
