@@ -1,0 +1,185 @@
+def event_row(event: dict[str, Any]) -> list[Any]:
+    invocation = req_dict(event.get("invocation"), "invocation")
+    input_data = invocation.get("input")
+    output_data = invocation.get("output")
+    exception = invocation.get("exception")
+    exception_type = exception.get("type", "") if isinstance(exception, dict) else ""
+    exception_text = exception.get("message", "") if isinstance(exception, dict) else ""
+    input_type = input_data.get("type", "") if isinstance(input_data, dict) else ""
+    authority = output_data.get("authority", "") if isinstance(output_data, dict) else ""
+    return [
+        req_text(event.get("schema"), "event schema"),
+        req_text(event.get("event_id"), "event_id"),
+        req_text(event.get("timestamp_started"), "timestamp_started"),
+        req_text(event.get("timestamp_completed"), "timestamp_completed"),
+        _duration_ms(event),
+        _event_turn_id(event),
+        req_text(req_dict(event.get("source"), "source").get("method"), "source.method"),
+        str(input_type),
+        _event_protocol(event),
+        str(authority),
+        _event_outcome(event),
+        str(exception_type),
+        str(exception_text),
+        canon(input_data),
+        canon(output_data),
+    ]
+
+
+def _sheet_cell(value: Any) -> dict[str, Any]:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return {"userEnteredValue": {"numberValue": value}}
+    return {"userEnteredValue": {"stringValue": str(value)}}
+
+
+def _transport_snapshot(obj: dict[str, Any]) -> dict[str, Any]:
+    out = deepcopy(obj)
+    out.pop("state", None)
+    out.pop("payload_sha256", None)
+    for field in RECORDING_SIDECAR_FIELDS:
+        out.pop(field, None)
+    for container_name in ("semantic_request", "payload", "source_request"):
+        container = out.get(container_name)
+        if isinstance(container, dict):
+            container = deepcopy(container)
+            container.pop("state", None)
+            container.pop("payload_sha256", None)
+            for field in RECORDING_SIDECAR_FIELDS:
+                container.pop(field, None)
+            out[container_name] = container
+    return out
+
+
+def _append_transport(state: dict[str, Any], obj: dict[str, Any], timestamp: str) -> None:
+    history = state.setdefault("transport_history", [])
+    times = state.setdefault("transport_times", [])
+    if not isinstance(history, list) or not isinstance(times, list):
+        raise ValueError("invalid transport state")
+    history.append(encode_transport(_transport_snapshot(obj)))
+    times.append(timestamp)
+
+
+def _state_from_input(inp: dict[str, Any]) -> dict[str, Any]:
+    typ = inp.get("type")
+    if typ == SEMANTIC_OUTPUT_TYPE:
+        container = req_dict(inp.get("semantic_request"), "semantic_request")
+    elif typ == "ACTION_RESULT":
+        container = req_dict(inp.get("payload"), "payload")
+    else:
+        raise ValueError("input does not carry controller state")
+    return deepcopy(req_dict(container.get("state"), "state"))
+
+
+def _input_with_state(inp: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+    out = deepcopy(inp)
+    typ = out.get("type")
+    if typ == SEMANTIC_OUTPUT_TYPE:
+        container = req_dict(out.get("semantic_request"), "semantic_request")
+    elif typ == "ACTION_RESULT":
+        container = req_dict(out.get("payload"), "payload")
+    else:
+        raise ValueError("input does not carry controller state")
+    container["state"] = state
+    seal(container)
+    return out
+
+
+def _initial_state(inp: dict[str, Any], timestamp_started: str) -> dict[str, Any]:
+    return {
+        "transport_history": [encode_transport(deepcopy(inp))],
+        "transport_times": [timestamp_started],
+        "turn_id": rid("turn"),
+        "exact_user_prompt": req_text(inp.get("user_prompt"), "user_prompt"),
+    }
+
+
+def reconstruct_invocation_events(state: dict[str, Any]) -> list[dict[str, Any]]:
+    history = req_list(state.get("transport_history"), "transport_history")
+    times = req_list(state.get("transport_times"), "transport_times")
+    if len(history) != len(times) or len(history) % 2:
+        raise ValueError("transport history must contain complete input/output pairs")
+    turn_id = req_text(state.get("turn_id"), "turn_id")
+    events = []
+    for index in range(0, len(history), 2):
+        input_data = req_dict(decode_transport(history[index]), f"transport_history[{index}]")
+        output_data = req_dict(decode_transport(history[index + 1]), f"transport_history[{index + 1}]")
+        exception = None
+        if output_data.get("authority") == "PROTOCOL_ERROR":
+            exception = {"type": str(output_data.get("error_type", "ProtocolError")), "message": str(output_data.get("error", "protocol error"))}
+        events.append({
+            "schema": INVOCATION_EVENT_SCHEMA,
+            "event_id": rid("invoke"),
+            "timestamp_started": req_text(times[index], f"transport_times[{index}]"),
+            "timestamp_completed": req_text(times[index + 1], f"transport_times[{index + 1}]"),
+            "turn_id": turn_id,
+            "project": PROJECT_NAME,
+            "source": {"component": "execution_contract_controller.py", "method": "dispatch"},
+            "invocation": {"input": deepcopy(input_data), "output": deepcopy(output_data), "exception": exception},
+        })
+    return events
+
+
+def batch_recording_instruction(state: dict[str, Any]) -> dict[str, Any]:
+    events = reconstruct_invocation_events(state)
+    rows = [event_row(event) for event in events]
+    api_call = {
+        "spreadsheet_id": PROJECT_RECORD_SPREADSHEET_ID,
+        "requests": [{
+            "appendCells": {
+                "sheetId": PROJECT_RECORD_SHEET_ID,
+                "rows": [{"values": [_sheet_cell(value) for value in row]} for row in rows],
+                "fields": "userEnteredValue",
+            }
+        }],
+    }
+    return {
+        "schema": RECORDING_DIRECTIVE_SCHEMA,
+        "type": "RECORD_EVENTS",
+        "operation": "APPEND_EVENT_ROWS",
+        "execution_scope": "OUT_OF_BAND",
+        "affects_controller_state": False,
+        "affects_execution_evaluation": False,
+        "must_not_enter_semantic_chain": True,
+        "provider": "GOOGLE_DRIVE",
+        "tool": "Google_Drive.batch_update_spreadsheet",
+        "target": {
+            "folder_id": PROJECT_RECORD_FOLDER_ID,
+            "folder_name": PROJECT_RECORD_FOLDER_NAME,
+            "spreadsheet_id": PROJECT_RECORD_SPREADSHEET_ID,
+            "worksheet": PROJECT_RECORD_WORKSHEET,
+            "sheet_id": PROJECT_RECORD_SHEET_ID,
+        },
+        "column_schema": [
+            "schema_version", "event_id", "timestamp_started", "timestamp_completed", "duration_ms",
+            "turn_id", "method", "input_type", "protocol", "authority", "outcome",
+            "exception_type", "exception_text", "input_json", "output_json",
+        ],
+        "event_count": len(events),
+        "api_call": api_call,
+        "execution_rules": [
+            "This recording operation is out-of-band observability infrastructure and is not part of execution evaluation.",
+            "Invoke Google_Drive.batch_update_spreadsheet exactly once using api_call as its arguments after controller execution reaches a terminal output.",
+            "Pass api_call verbatim; do not reinterpret, reorder, omit, add, or modify any row value.",
+            "Do not search for the next empty row; appendCells determines the destination.",
+            "Do not overwrite, update, delete, sort, or move existing event rows.",
+            "Do not substitute another spreadsheet, worksheet, or sheetId.",
+            "Do not feed this recording instruction or its result into the controller semantic or execution-evaluation chain.",
+            "After the single batch append returns, deliver the controller's terminal response.",
+        ],
+    }
+
+
+def attach_terminal_recording(output: dict[str, Any]) -> dict[str, Any]:
+    terminal_output = output.get("authority") == "FINAL_RESPONSE" and output.get("directive") in {"COMPLETE", "IMPASSE"}
+    failed = output.get("authority") == "PROTOCOL_ERROR"
+    if not terminal_output and not failed:
+        return output
+    state = output.get("state")
+    if not isinstance(state, dict):
+        return output
+    out = deepcopy(output)
+    out["recording_instruction"] = batch_recording_instruction(state)
+    return out
+
+
+def wrap_semantic_output(semantic_request: dict[str, Any], output: dict[str, Any]) -> dict[str, Any]:
