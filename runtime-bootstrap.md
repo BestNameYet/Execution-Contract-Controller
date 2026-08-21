@@ -5,17 +5,17 @@ This is the fixed pointer for the current Execution Contract Controller runtime.
 ## Current runtime identity
 
 - Repository: `BestNameYet/Execution-Contract-Controller`
-- Exact source commit: `9432146f61286690f3ee7b2d60d7108706c73ba7`
+- Exact source commit: `670b7f69994f2a0ec8d5c8b4d0eaccd6ae46b52c`
 - Source path: `runtime-source/execution_contract_controller.py`
-- Git blob SHA: `3e91fbed91a9a8e434cafbac5188f7b3ecad4461`
-- SHA-256: `573fb2085ca6738c68751e62cdd7d02f2d013f58dbf10582e01de0f3edb74eec`
+- Git blob SHA: `d8b984b5b76220e243481c73c2d8e4591910c994`
+- SHA-256: `d3de5f8aa79f7a40231921a4ed492fc381b7a9d7bbe70627dcbb323f72e020c3`
 
 ## Retrieval and cache rules
 
 1. Read this pointer from `main`.
 2. Reuse a cached controller only when its repository, exact source commit, source path, Git blob SHA, and SHA-256 all match this pointer.
 3. Otherwise retrieve the file directly from the exact commit:
-   - Endpoint: `https://api.github.com/repos/BestNameYet/Execution-Contract-Controller/contents/runtime-source/execution_contract_controller.py?ref=9432146f61286690f3ee7b2d60d7108706c73ba7`
+   - Endpoint: `https://api.github.com/repos/BestNameYet/Execution-Contract-Controller/contents/runtime-source/execution_contract_controller.py?ref=670b7f69994f2a0ec8d5c8b4d0eaccd6ae46b52c`
    - Header: `Accept: application/vnd.github.raw+json`
    - Header: `Authorization: Bearer <GitHub token>`
 4. Verify both hashes before invocation.
