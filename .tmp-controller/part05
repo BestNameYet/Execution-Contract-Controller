@@ -1,0 +1,177 @@
+    request = req_dict(semantic_request, "semantic_request")
+    result = req_dict(output, "output")
+    protocol = req_text(request.get("protocol"), "semantic request protocol")
+    spec = SEMANTIC_TRANSPORT_BY_PROTOCOL.get(protocol)
+    if spec is None:
+        raise ValueError(f"unsupported semantic protocol {protocol}")
+    transport_type, request_field, result_field = spec
+    return {"type": transport_type, request_field: request, result_field: result}
+
+
+def contract_request(state: dict[str, Any]) -> dict[str, Any]:
+    prompt = req_text(state.get("exact_user_prompt"), "exact_user_prompt")
+    return emit("SEMANTIC_REQUEST", state, protocol=CONTRACT_PROTOCOL, return_protocol=semantic_return_protocol(), request={
+        "task": "Compile the exact user instruction into an execution contract. Do not plan execution.",
+        "user_prompt": prompt,
+        "output_schema": contract_output_schema(),
+        "rules": [
+            "Represent requested results as terminal predicates, not execution steps.",
+            "Do not add tests, verification, inspection, planning, clarification, documentation, approvals, or process gates unless explicitly required by the user or a governing requirement.",
+            "Do not infer dependencies merely because they are prudent, useful, conventional, or confidence-increasing.",
+            "Preserve exclusions, sequencing, cardinality, scope, polarity, modality, and referents.",
+            "Return JSON only, using exactly the fields and values defined in output_schema.",
+        ],
+    })
+
+
+def normalize_contract(raw: dict[str, Any], prompt: str) -> dict[str, Any]:
+    if raw.get("schema") != CONTRACT_SCHEMA:
+        raise ValueError("invalid contract schema")
+    terminals = req_list(raw.get("terminal_predicates"), "terminal_predicates")
+    if not terminals:
+        raise ValueError("at least one terminal predicate required")
+    seen: set[str] = set()
+    tids: set[str] = set()
+    nts = []
+    for i, x in enumerate(terminals):
+        x = req_dict(x, f"terminal[{i}]")
+        pid = req_text(x.get("id"), "predicate id")
+        if pid in seen:
+            raise ValueError(f"duplicate id {pid}")
+        seen.add(pid)
+        tids.add(pid)
+        order = x.get("explicit_order", i)
+        if not isinstance(order, int) or order < 0:
+            raise ValueError("explicit_order must be a nonnegative integer")
+        nts.append({
+            "id": pid,
+            "kind": "TERMINAL",
+            "description": req_text(x.get("description"), f"{pid}.description"),
+            "evidence_standard": req_text(x.get("evidence_standard"), f"{pid}.evidence_standard"),
+            "explicit_order": order,
+            "depends_on": [req_text(d, "dependency id") for d in req_list(x.get("depends_on", []), "depends_on")],
+        })
+    simple: dict[str, list[dict[str, str]]] = {}
+    for field in ("invariants", "authorizations", "prohibitions"):
+        arr = []
+        for i, x in enumerate(req_list(raw.get(field, []), field)):
+            x = req_dict(x, f"{field}[{i}]")
+            iid = req_text(x.get("id"), f"{field}.id")
+            if iid in seen:
+                raise ValueError(f"duplicate id {iid}")
+            seen.add(iid)
+            arr.append({"id": iid, "description": req_text(x.get("description"), f"{iid}.description")})
+        simple[field] = arr
+    deps = []
+    dep_ids = set()
+    for i, x in enumerate(req_list(raw.get("explicit_dependencies", []), "explicit_dependencies")):
+        x = req_dict(x, f"dependency[{i}]")
+        did = req_text(x.get("id"), "dependency id")
+        if did in seen:
+            raise ValueError(f"duplicate id {did}")
+        seen.add(did)
+        dep_ids.add(did)
+        required_for = [req_text(v, "required_for") for v in req_list(x.get("required_for"), "required_for")]
+        if not required_for or any(p not in tids for p in required_for):
+            raise ValueError(f"{did} has invalid required_for")
+        deps.append({
+            "id": did,
+            "kind": "DEPENDENCY",
+            "description": req_text(x.get("description"), f"{did}.description"),
+            "evidence_standard": req_text(x.get("evidence_standard"), f"{did}.evidence_standard"),
+            "required_for": required_for,
+            "origin": "USER_EXPLICIT",
+        })
+    known = tids | dep_ids
+    for p in nts:
+        if any(d not in known for d in p["depends_on"]):
+            raise ValueError(f"{p['id']} references unknown dependency")
+    out = {
+        "schema": CONTRACT_SCHEMA,
+        "source_prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        "terminal_predicates": nts,
+        "invariants": simple["invariants"],
+        "authorizations": simple["authorizations"],
+        "prohibitions": simple["prohibitions"],
+        "explicit_dependencies": deps,
+    }
+    out["contract_sha256"] = digest(out)
+    return out
+
+
+def init_state(prompt: str, contract: dict[str, Any], carried_state: dict[str, Any]) -> dict[str, Any]:
+    ps = {p["id"]: "UNSATISFIED" for p in contract["terminal_predicates"]}
+    ps.update({d["id"]: "UNSATISFIED" for d in contract["explicit_dependencies"]})
+    state = {
+        "transport_history": deepcopy(req_list(carried_state.get("transport_history"), "transport_history")),
+        "transport_times": deepcopy(req_list(carried_state.get("transport_times"), "transport_times")),
+        "turn_id": req_text(carried_state.get("turn_id"), "turn_id"),
+        "exact_user_prompt": prompt,
+        "contract": contract,
+        "predicate_state": ps,
+        "dynamic_dependencies": [],
+        "active_target": None,
+        "active_action_id": None,
+        "blocked_realizations": {},
+        "record": [],
+    }
+    record(state, "CONTRACT_ACCEPTED", {"contract_sha256": contract["contract_sha256"]})
+    return state
+
+
+def terminal(state: dict[str, Any], pid: str) -> dict[str, Any] | None:
+    return next((p for p in state["contract"]["terminal_predicates"] if p["id"] == pid), None)
+
+
+def dependency(state: dict[str, Any], did: str) -> dict[str, Any] | None:
+    pool = state["contract"]["explicit_dependencies"] + state.get("dynamic_dependencies", [])
+    return next((d for d in pool if d["id"] == did), None)
+
+
+def deps_for(state: dict[str, Any], p: dict[str, Any]) -> list[str]:
+    out = list(p.get("depends_on", []))
+    for d in state["contract"]["explicit_dependencies"] + state.get("dynamic_dependencies", []):
+        if p["id"] in d.get("required_for", []) and d["id"] not in out:
+            out.append(d["id"])
+    return out
+
+
+def all_done(state: dict[str, Any]) -> bool:
+    return all(state["predicate_state"].get(p["id"]) == "SATISFIED" for p in state["contract"]["terminal_predicates"])
+
+
+def select_target(state: dict[str, Any]) -> tuple[str, str] | None:
+    for p in sorted(state["contract"]["terminal_predicates"], key=lambda x: (x["explicit_order"], x["id"])):
+        if state["predicate_state"].get(p["id"]) == "SATISFIED":
+            continue
+        for did in deps_for(state, p):
+            if state["predicate_state"].get(did) != "SATISFIED":
+                return did, "DEPENDENCY"
+        return p["id"], "TERMINAL"
+    return None
+
+
+def descriptor(state: dict[str, Any], pid: str, kind: str) -> dict[str, Any]:
+    obj = terminal(state, pid) if kind == "TERMINAL" else dependency(state, pid)
+    if obj is None:
+        raise ValueError("unknown scheduled predicate")
+    return deepcopy(obj)
+
+
+def decision_context(state: dict[str, Any], pid: str, kind: str) -> dict[str, Any]:
+    dependencies = []
+    for dep in state["contract"]["explicit_dependencies"] + state.get("dynamic_dependencies", []):
+        dependencies.append({**deepcopy(dep), "status": state["predicate_state"].get(dep["id"], "UNSATISFIED")})
+    return {
+        "scheduled_predicate": descriptor(state, pid, kind),
+        "dependencies": dependencies,
+        "invariants": deepcopy(state["contract"]["invariants"]),
+        "authorizations": deepcopy(state["contract"]["authorizations"]),
+        "prohibitions": deepcopy(state["contract"]["prohibitions"]),
+        "blocked_realizations": deepcopy(state["blocked_realizations"].get(pid, [])),
+    }
+
+
+def realization_request(state: dict[str, Any]) -> dict[str, Any]:
+    if all_done(state):
+        record(state, "TASK_COMPLETE", {"predicate_state": deepcopy(state["predicate_state"])})
