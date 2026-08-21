@@ -8,10 +8,12 @@ updates, completion, and impasse routing.
 # Documentation-only publication marker; runtime semantics remain unchanged.
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import sys
 import uuid
+from pathlib import Path
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
@@ -101,6 +103,80 @@ BEHAVIORAL_INSTRUCTIONS = [
     "Treat impasse as a property of the remaining contract state, not of a single failed operation; an impasse exists only when no legitimate continuation path remains.",
     "Preserve contract invariants, authorizations, prohibitions, dependencies, and blocked semantic equivalents throughout execution.",
 ]
+
+
+# Transport-history codec. Every static string literal in this exact controller
+# source receives a compact numeric token. Dynamic user/model/tool content is
+# preserved literally. The token table is controller-private and reconstructed
+# deterministically from the pinned source file on each process invocation.
+TRANSPORT_TOKEN_PREFIX = "~"
+
+
+def _transport_token_tables() -> tuple[dict[str, int], dict[int, str]]:
+    source = Path(__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=__file__)
+    vocabulary = sorted({
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value
+    })
+    by_text = {text: index + 1 for index, text in enumerate(vocabulary)}
+    return by_text, {token: text for text, token in by_text.items()}
+
+
+TOKEN_BY_TEXT, TEXT_BY_TOKEN = _transport_token_tables()
+
+
+def _encode_transport_string(value: str) -> str:
+    token = TOKEN_BY_TEXT.get(value)
+    if token is not None:
+        return f"{TRANSPORT_TOKEN_PREFIX}{token}"
+    if value.startswith(TRANSPORT_TOKEN_PREFIX):
+        return TRANSPORT_TOKEN_PREFIX + value
+    return value
+
+
+def _decode_transport_string(value: str) -> str:
+    doubled = TRANSPORT_TOKEN_PREFIX * 2
+    if value.startswith(doubled):
+        return value[1:]
+    if value.startswith(TRANSPORT_TOKEN_PREFIX):
+        suffix = value[len(TRANSPORT_TOKEN_PREFIX):]
+        if suffix.isdigit():
+            token = int(suffix)
+            text = TEXT_BY_TOKEN.get(token)
+            if text is None:
+                raise ValueError(f"unknown transport token {token}")
+            return text
+    return value
+
+
+def encode_transport(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            _encode_transport_string(key) if isinstance(key, str) else key: encode_transport(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [encode_transport(item) for item in value]
+    if isinstance(value, tuple):
+        return [encode_transport(item) for item in value]
+    if isinstance(value, str):
+        return _encode_transport_string(value)
+    return value
+
+
+def decode_transport(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            _decode_transport_string(key) if isinstance(key, str) else key: decode_transport(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [decode_transport(item) for item in value]
+    if isinstance(value, str):
+        return _decode_transport_string(value)
+    return value
 
 
 def now() -> str:
@@ -319,7 +395,7 @@ def _append_transport(state: dict[str, Any], obj: dict[str, Any], timestamp: str
     times = state.setdefault("transport_times", [])
     if not isinstance(history, list) or not isinstance(times, list):
         raise ValueError("invalid transport state")
-    history.append(_transport_snapshot(obj))
+    history.append(encode_transport(_transport_snapshot(obj)))
     times.append(timestamp)
 
 
@@ -350,7 +426,7 @@ def _input_with_state(inp: dict[str, Any], state: dict[str, Any]) -> dict[str, A
 
 def _initial_state(inp: dict[str, Any], timestamp_started: str) -> dict[str, Any]:
     return {
-        "transport_history": [deepcopy(inp)],
+        "transport_history": [encode_transport(deepcopy(inp))],
         "transport_times": [timestamp_started],
         "turn_id": rid("turn"),
         "exact_user_prompt": req_text(inp.get("user_prompt"), "user_prompt"),
@@ -365,8 +441,8 @@ def reconstruct_invocation_events(state: dict[str, Any]) -> list[dict[str, Any]]
     turn_id = req_text(state.get("turn_id"), "turn_id")
     events = []
     for index in range(0, len(history), 2):
-        input_data = req_dict(history[index], f"transport_history[{index}]")
-        output_data = req_dict(history[index + 1], f"transport_history[{index + 1}]")
+        input_data = req_dict(decode_transport(history[index]), f"transport_history[{index}]")
+        output_data = req_dict(decode_transport(history[index + 1]), f"transport_history[{index + 1}]")
         exception = None
         if output_data.get("authority") == "PROTOCOL_ERROR":
             exception = {
