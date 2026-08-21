@@ -1,0 +1,168 @@
+    if not admissible:
+        state["blocked_realizations"].setdefault(a["predicate_id"], []).append({
+            "fingerprint": op_fingerprint(op),
+            "operation": deepcopy(op),
+            "semantic_result": deepcopy(r),
+        })
+        return realization_request(state)
+    action_id = rid("action")
+    state["active_action_id"] = action_id
+    record(state, "ACTION_AUTHORIZED", {"action_id": action_id, "predicate_id": a["predicate_id"], "operation": deepcopy(op)})
+    return emit(
+        "TASK_ACTION",
+        state,
+        action_id=action_id,
+        scheduled_predicate=descriptor(state, a["predicate_id"], a["kind"]),
+        operation=op,
+        command=op["command"],
+        return_protocol={
+            "type": "ACTION_RESULT",
+            "payload": "return this TASK_ACTION payload unchanged; it carries the controller state required for the next stateless invocation",
+            "result_schema": action_result_schema(),
+        },
+    )
+
+
+def handle_dependency(inp: dict[str, Any]) -> dict[str, Any]:
+    p = verify(req_dict(inp.get("payload"), "payload"))
+    state = deepcopy(p["state"])
+    if p.get("protocol") != DEPENDENCY_PROTOCOL:
+        raise ValueError("wrong protocol")
+    r = req_dict(inp.get("result"), "result")
+    vals = {k: req_bool(r.get(k), k) for k in (
+        "observed_block_is_current_and_concrete",
+        "scheduled_predicate_cannot_legitimately_be_realized_while_condition_is_false",
+        "condition_is_not_merely_prudent_optional_or_confidence_increasing",
+        "dependency_is_within_user_objective_or_governing_requirement",
+        "simpler_direct_realization_remains_available",
+        "legitimate_path_to_scheduled_predicate_remains_if_dependency_is_omitted",
+    )}
+    admit = (
+        vals["observed_block_is_current_and_concrete"]
+        and vals["scheduled_predicate_cannot_legitimately_be_realized_while_condition_is_false"]
+        and vals["condition_is_not_merely_prudent_optional_or_confidence_increasing"]
+        and vals["dependency_is_within_user_objective_or_governing_requirement"]
+        and not vals["simpler_direct_realization_remains_available"]
+        and not vals["legitimate_path_to_scheduled_predicate_remains_if_dependency_is_omitted"]
+    )
+    a = req_dict(state.get("active_target"), "active_target")
+    proposal = req_dict(p.get("pending_dependency"), "pending_dependency")
+    record(state, "DEPENDENCY_CLASSIFIED", {
+        "parent": a["predicate_id"],
+        "admitted": admit,
+        "counterfactual_path_remains": vals["legitimate_path_to_scheduled_predicate_remains_if_dependency_is_omitted"],
+        "result": deepcopy(r),
+    })
+    if not admit:
+        return realization_request(state)
+    did = rid("DYN")
+    dep = {
+        "id": did,
+        "kind": "DEPENDENCY",
+        "description": proposal["description"],
+        "evidence_standard": proposal["evidence_standard"],
+        "required_for": [a["predicate_id"]],
+        "origin": "OBSERVED_TECHNICAL_NECESSITY",
+        "observed_block": proposal["observed_block"],
+    }
+    state["dynamic_dependencies"].append(dep)
+    state["predicate_state"][did] = "UNSATISFIED"
+    record(state, "DEPENDENCY_ADMITTED", {"dependency": deepcopy(dep)})
+    return realization_request(state)
+
+
+def evidence_request(task_payload: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    state = deepcopy(task_payload["state"])
+    a = req_dict(state.get("active_target"), "active_target")
+    ar = {
+        "executed": req_bool(result.get("executed"), "executed"),
+        "succeeded": req_bool(result.get("succeeded"), "succeeded"),
+        "observable_evidence": req_text(result.get("observable_evidence"), "observable_evidence"),
+        "resulting_state": req_text(result.get("resulting_state"), "resulting_state"),
+    }
+    record(state, "ACTION_RESULT_REPORTED", {"action_id": task_payload.get("action_id"), "predicate_id": a["predicate_id"], "result": deepcopy(ar)})
+    return emit("SEMANTIC_REQUEST", state, protocol=EVIDENCE_PROTOCOL, return_protocol=semantic_return_protocol(), pending_action_result=ar, pending_operation=deepcopy(task_payload.get("operation")), request={
+        "task": "Classify whether the observable evidence establishes the scheduled predicate.",
+        "decision_context": decision_context(state, a["predicate_id"], a["kind"]),
+        "action_result": ar,
+        "output_schema": evidence_output_schema(),
+        "rules": [
+            "Use only observable evidence.",
+            "Tool success is not automatically predicate satisfaction.",
+            "Do not require more than the accepted evidence standard.",
+            "Apply each field and enum-value definition exactly as written.",
+            "Return JSON only, using exactly the fields and values defined in output_schema.",
+        ],
+    })
+
+
+def handle_evidence(inp: dict[str, Any]) -> dict[str, Any]:
+    p = verify(req_dict(inp.get("payload"), "payload"))
+    state = deepcopy(p["state"])
+    if p.get("protocol") != EVIDENCE_PROTOCOL:
+        raise ValueError("wrong protocol")
+    r = req_dict(inp.get("result"), "result")
+    verdict = req_enum(r.get("verdict"), VERDICTS, "verdict")
+    allowed = {x["id"] for x in state["contract"]["invariants"]}
+    violated = False
+    for x in req_list(r.get("invariant_status", []), "invariant_status"):
+        x = req_dict(x, "invariant status")
+        iid = req_text(x.get("id"), "invariant id")
+        if iid not in allowed:
+            raise ValueError(f"unknown invariant {iid}")
+        status = req_enum(x.get("status"), {"PRESERVED", "VIOLATED", "INDETERMINATE"}, "status")
+        if status == "VIOLATED":
+            violated = True
+    a = req_dict(state.get("active_target"), "active_target")
+    pid = a["predicate_id"]
+    if violated:
+        return impasse_request(state, "Accepted invariant classified as violated.")
+    if verdict == "SATISFIED":
+        state["predicate_state"][pid] = "SATISFIED"
+        state["active_target"] = None
+        state["active_action_id"] = None
+        record(state, "PREDICATE_SATISFIED", {"predicate_id": pid, "evidence": deepcopy(p.get("pending_action_result"))})
+        return realization_request(state)
+    op = p.get("pending_operation")
+    if isinstance(op, dict):
+        state["blocked_realizations"].setdefault(pid, []).append({
+            "fingerprint": op_fingerprint(op),
+            "operation": deepcopy(op),
+            "semantic_result": {"post_action_verdict": verdict},
+        })
+    state["active_action_id"] = None
+    record(state, "PREDICATE_NOT_SATISFIED", {"predicate_id": pid, "verdict": verdict})
+    return realization_request(state)
+
+
+def handle_impasse(inp: dict[str, Any]) -> dict[str, Any]:
+    p = verify(req_dict(inp.get("payload"), "payload"))
+    state = deepcopy(p["state"])
+    if p.get("protocol") != IMPASSE_PROTOCOL:
+        raise ValueError("wrong protocol")
+    r = req_dict(inp.get("result"), "result")
+    unattainable = req_bool(r.get("requested_result_or_required_dependency_is_currently_unattainable"), "unattainable")
+    alt = req_bool(r.get("materially_different_legitimate_path_remains_available"), "alternative path")
+    resolvable = req_bool(r.get("missing_information_is_resolvable_retrievable_calculable_or_safely_assumable"), "resolvable missing information")
+    assistant_block = req_bool(r.get("remaining_block_is_created_only_by_assistant_process_or_preference"), "assistant process block")
+    scope = req_enum(r.get("scope"), SCOPES, "scope")
+    genuine = unattainable and not alt and not resolvable and not assistant_block and scope in {"PREDICATE_UNATTAINABLE", "TASK_UNATTAINABLE"}
+    record(state, "IMPASSE_CLASSIFIED", {"genuine": genuine, "result": deepcopy(r)})
+    if genuine:
+        return emit("FINAL_RESPONSE", state, directive="IMPASSE", command="Deliver the final response describing the concrete observed impasse and completed work. Do not invent additional limitations.")
+    return realization_request(state)
+
+
+def dispatch_semantic_transport(inp: dict[str, Any]) -> dict[str, Any]:
+    typ = inp.get("type")
+    if typ == "CONTRACT_RESULT":
+        return handle_contract(inp)
+    if typ == "REALIZATION_RESULT":
+        return handle_realization(inp)
+    if typ == "ADMISSIBILITY_RESULT":
+        return handle_admissibility(inp)
+    if typ == "DEPENDENCY_RESULT":
+        return handle_dependency(inp)
+    if typ == "EVIDENCE_RESULT":
+        return handle_evidence(inp)
+    if typ == "IMPASSE_RESULT":
