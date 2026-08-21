@@ -1,0 +1,105 @@
+        "introduces_unadmitted_prerequisite": boolean_field(
+            "Whether the proposed operation treats additional work or a condition as required even though it has not been admitted as a dependency.",
+            "The operation introduces or depends on a prerequisite that is not in the admitted dependency set.",
+            "The operation does not introduce or rely on any unadmitted prerequisite.",
+        ),
+        "repeats_blocked_realization_or_semantic_equivalent": boolean_field(
+            "Whether the proposal is the same as, or contextually equivalent to, a realization already blocked for this scheduled predicate.",
+            "The proposal repeats a blocked realization or a semantic equivalent of one.",
+            "The proposal is materially distinct from all blocked realizations supplied in context.",
+        ),
+        "requires_additional_material_action_before_it_can_have_stated_effect": boolean_field(
+            "Whether successful execution of this operation alone is insufficient to produce its stated expected observable effect.",
+            "Another material operation must occur before the stated expected effect can exist.",
+            "This operation itself can produce the stated expected observable effect when successful.",
+        ),
+        "is_indirect_or_support_operation": boolean_field(
+            "Whether the proposal is preparation, inspection, planning, verification, setup, or other support work rather than direct realization of the scheduled state.",
+            "The proposal is indirect/support work and does not itself realize the scheduled state.",
+            "The proposal is not indirect/support work; it is itself a realization attempt for the scheduled state.",
+        ),
+        "legitimate_path_to_scheduled_predicate_remains_if_operation_is_omitted": boolean_field(
+            "Counterfactual necessity test: whether at least one legitimate path to the scheduled predicate remains if this operation is not performed.",
+            "At least one legitimate path remains without performing this operation.",
+            "No legitimate path remains if this operation is omitted.",
+        ),
+    })
+
+
+def dependency_output_schema() -> dict[str, Any]:
+    return object_field("Closed classification of whether the proposed dependency may enter the execution graph. Return every field.", {
+        "observed_block_is_current_and_concrete": boolean_field(
+            "Whether the observed block is a specific fact that exists now rather than a hypothetical or generic concern.",
+            "The block is current, concrete, and supported by the supplied context.",
+            "The block is hypothetical, generic, stale, unsupported, or not currently present.",
+        ),
+        "scheduled_predicate_cannot_legitimately_be_realized_while_condition_is_false": boolean_field(
+            "Whether the scheduled predicate is genuinely unrealizable while the proposed dependency remains unsatisfied.",
+            "No legitimate realization of the scheduled predicate can occur while the condition remains false.",
+            "At least one legitimate realization can occur while the condition remains false.",
+        ),
+        "condition_is_not_merely_prudent_optional_or_confidence_increasing": boolean_field(
+            "Whether the condition is necessary rather than merely useful, prudent, conventional, optional, or confidence-increasing.",
+            "The condition is genuinely necessary rather than merely beneficial.",
+            "The condition is only prudent, useful, conventional, optional, or confidence-increasing.",
+        ),
+        "dependency_is_within_user_objective_or_governing_requirement": boolean_field(
+            "Whether satisfying the proposed dependency stays within the user's objective or a governing requirement supplied in context.",
+            "The dependency is within the authorized objective or required by a governing constraint.",
+            "The dependency is outside the authorized objective and is not required by a governing constraint.",
+        ),
+        "simpler_direct_realization_remains_available": boolean_field(
+            "Whether a simpler legitimate operation can directly realize the scheduled predicate without satisfying the proposed dependency first.",
+            "A simpler direct realization remains available.",
+            "No simpler direct realization remains available.",
+        ),
+        "legitimate_path_to_scheduled_predicate_remains_if_dependency_is_omitted": boolean_field(
+            "Counterfactual necessity test: whether any legitimate path to the scheduled predicate remains if this dependency is omitted from the graph.",
+            "At least one legitimate path remains if the dependency is omitted.",
+            "No legitimate path remains if the dependency is omitted.",
+        ),
+    })
+
+
+def evidence_output_schema() -> dict[str, Any]:
+    return object_field("Classification of the action evidence against the scheduled predicate and accepted invariants. Return every field.", {
+        "verdict": enum_field("Whether the supplied observable evidence establishes the scheduled predicate under its accepted evidence standard.", {
+            "SATISFIED": "The observable evidence is sufficient to establish that the scheduled predicate is true.",
+            "NOT_SATISFIED": "The observable evidence establishes that the scheduled predicate is not yet true after the attempted operation.",
+            "INDETERMINATE": "The supplied observable evidence is insufficient to determine whether the scheduled predicate is true or false.",
+        }),
+        "invariant_status": array_field("One classification for every invariant supplied in the decision context.", object_field("Status of one invariant after the action result.", {
+            "id": text_field("The exact invariant identifier from the supplied decision context."),
+            "status": enum_field("Whether the action evidence establishes preservation or violation of this invariant.", {
+                "PRESERVED": "The observable evidence establishes that the invariant remained true.",
+                "VIOLATED": "The observable evidence establishes that the invariant became false.",
+                "INDETERMINATE": "The observable evidence is insufficient to establish either preservation or violation.",
+            }),
+        })),
+    })
+
+
+def impasse_output_schema() -> dict[str, Any]:
+    return object_field("Closed classification of whether a genuine execution impasse exists. Return every field.", {
+        "requested_result_or_required_dependency_is_currently_unattainable": boolean_field(
+            "Whether the remaining requested result or currently required dependency cannot presently be attained.",
+            "The relevant remaining state is currently unattainable.",
+            "The relevant remaining state is not established as currently unattainable.",
+        ),
+        "materially_different_legitimate_path_remains_available": boolean_field(
+            "Whether a materially different legitimate continuation path remains available despite the current block or failed realization.",
+            "At least one materially different legitimate continuation path remains.",
+            "No materially different legitimate continuation path remains.",
+        ),
+        "missing_information_is_resolvable_retrievable_calculable_or_safely_assumable": boolean_field(
+            "Whether missing information causing the apparent block can legitimately be resolved by retrieval, calculation, or a safe assumption.",
+            "The missing information can legitimately be resolved without declaring impasse.",
+            "The missing information cannot legitimately be resolved by the available methods.",
+        ),
+        "remaining_block_is_created_only_by_assistant_process_or_preference": boolean_field(
+            "Whether the remaining block exists only because of assistant-added process, preference, convention, or self-imposed requirements.",
+            "The block is assistant-created rather than inherent in the user's requested state or governing constraints.",
+            "The block is not merely assistant-created process or preference.",
+        ),
+        "scope": enum_field("The maximum scope of the claimed unattainability.", {
+            "TRANSITION_ONLY": "Only the particular attempted transition is blocked; other paths may remain.",
