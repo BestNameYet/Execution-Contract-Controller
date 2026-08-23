@@ -5,7 +5,7 @@ This is the fixed pointer for the current Execution Contract Controller runtime,
 ## Current runtime identity
 
 - Repository: `BestNameYet/Execution-Contract-Controller`
-- Exact runtime commit: `0031ea213d04f8b60b9c3ec02f877320ce5cec2c`
+- Exact runtime commit: `ad81eca68485a1c31654b99e1db7e24d8d827434`
 - Controller: `runtime-source/execution_contract_controller.py`
   - Git blob SHA: `6e49e9ee596b927fcb2b7036218068d97ddeb3a5`
   - SHA-256: `27e473f0109290a0e3d4d987498d21b83eb74f9914ded3e0528a372cb626dea6`
@@ -14,8 +14,8 @@ This is the fixed pointer for the current Execution Contract Controller runtime,
   - SHA-256: `cf47a5a292c3663c1d81dfdf744acc86a5ec9de5ab5536a0765ca14647c9c709`
   - Schema/version: `execution-knowledge-base-v1` / `2`
 - Persistent carrier: `runtime-source/runtime_carrier.py`
-  - Git blob SHA: `b558f492f3511db7ca1e303abc4f5fd7c80ad58a`
-  - SHA-256: `f17a54a7e762f465da8c24abce745a9d7c33dd899feb8be86b0261a5fd3c6038`
+  - Git blob SHA: `b6f026aeced3eb306743a4685e3787a0fe22a55a`
+  - SHA-256: `5d36c1dd517effe1a7a1e93cdf8dc12e98067f238fffe9b6990c6fb50ce30da8`
 - Carrier client: `runtime-source/runtime_client.py`
   - Git blob SHA: `58411d2b38090590ddb319e3430a777d9c2d8745`
   - SHA-256: `12a740097cd941c93b514870f7894b84d3c095a87b3af98e9ac0150f8c4ff158`
@@ -54,14 +54,22 @@ Before the first governed invocation in a runtime:
 
 1. Verify the five cached files against this pointer.
 2. If `/mnt/data/execution_runtime/runtime_manifest.json` exists, use the verified client to `PING` the carrier.
-3. Reuse the carrier only when it responds successfully and is the carrier for the verified runtime. Otherwise stop any stale carrier if possible and start the verified carrier detached:
+3. If no carrier responds, stop any stale process if possible and start the verified carrier detached:
 
 ```bash
 nohup python /mnt/data/execution_runtime/runtime_carrier.py \
   >/mnt/data/execution_runtime/runtime_carrier.log 2>&1 &
 ```
 
-The carrier owns `runtime_state.json`, `kb_overlay.json`, `runtime_manifest.json`, and the Unix socket `/tmp/execution-runtime.sock` across model/tool invocations in that runtime.
+4. Set the carrier's published runtime identity without changing KB overlay publication state:
+
+```bash
+python /mnt/data/execution_runtime/runtime_client.py BASE_SET '{"published_base":{"repository":"BestNameYet/Execution-Contract-Controller","runtime_commit":"ad81eca68485a1c31654b99e1db7e24d8d827434","kb_blob_sha":"c1bc59368b0521aae278c1f955b6fe4f5526c4c8","kb_sha256":"cf47a5a292c3663c1d81dfdf744acc86a5ec9de5ab5536a0765ca14647c9c709","kb_schema":"execution-knowledge-base-v1","kb_version":2}}'
+```
+
+5. Reuse the carrier only after `PING` reports that exact published-base identity.
+
+The carrier owns `runtime_state.json`, `kb_overlay.json`, `runtime_manifest.json`, and the Unix socket `/tmp/execution-runtime.sock` across model/tool invocations in that runtime. `BASE_SET` changes only runtime identity; it does not mark pending KB overlay records as published.
 
 ## Required invocation
 
