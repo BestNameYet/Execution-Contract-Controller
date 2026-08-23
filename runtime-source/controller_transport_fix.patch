@@ -1,0 +1,99 @@
+--- a/runtime-source/execution_contract_controller.py
++++ b/runtime-source/execution_contract_controller.py
+@@ -31,6 +31,9 @@
+ 
+ KNOWLEDGE_BASE_PATH = Path(__file__).with_name("execution_knowledge_base.json")
+ RUNTIME_MANIFEST_PATH = Path("/mnt/data/execution_runtime/runtime_manifest.json")
++RECORDER_MAX_DEPTH = 18
++RECORDER_MAX_CELL_CHARS = 45000
++RECORDER_OMIT_KEYS = {"state", "transport_history", "recording_event", "recording_instruction"}
+ KNOWLEDGE_TYPES = {"invariant", "action", "procedure", "heuristic", "pattern", "capability"}
+ 
+ CONTRACT_PROTOCOL = "compile-contract-v1"
+@@ -301,9 +304,19 @@
+         "output": "return only JSON matching request.output_schema",
+     }
+ 
++def _transport_snapshot(item: dict[str, Any]) -> dict[str, Any]:
++    snap = deepcopy(item)
++    for key in ("state", "recording_event", "recording_instruction"):
++        snap.pop(key, None)
++    for container_key in ("semantic_request", "payload", "source_request"):
++        container = snap.get(container_key)
++        if isinstance(container, dict):
++            for key in ("state", "recording_event", "recording_instruction"):
++                container.pop(key, None)
++    return snap
+ 
+ def _append_transport(state: dict[str, Any], item: dict[str, Any], timestamp: str) -> None:
+-    state.setdefault("transport_history", []).append(deepcopy(item))
++    state.setdefault("transport_history", []).append(_transport_snapshot(item))
+     state.setdefault("transport_times", []).append(timestamp)
+ 
+ def _state_from_input(inp: dict[str, Any]) -> dict[str, Any]:
+@@ -334,6 +347,54 @@
+ 
+ def _sheet_cell(value: str) -> dict[str, Any]:
+     return {"userEnteredValue": {"stringValue": value}}
++
++def _recorder_placeholder(reason: str, value: Any = None) -> dict[str, Any]:
++    out: dict[str, Any] = {"$omitted": reason}
++    if value is not None:
++        try:
++            raw = canon(value)
++            out["sha256"] = hashlib.sha256(raw.encode("utf-8")).hexdigest()
++            out["serialized_chars"] = len(raw)
++        except Exception:
++            out["value_type"] = type(value).__name__
++    return out
++
++def _recorder_sanitize(value: Any, depth: int = 0, ancestors: set[int] | None = None) -> Any:
++    if depth > RECORDER_MAX_DEPTH:
++        return _recorder_placeholder("max_depth_exceeded")
++    if not isinstance(value, (dict, list)):
++        return deepcopy(value)
++    ancestors = set() if ancestors is None else ancestors
++    oid = id(value)
++    if oid in ancestors:
++        return _recorder_placeholder("object_cycle_detected")
++    branch_ancestors = set(ancestors)
++    branch_ancestors.add(oid)
++    if isinstance(value, list):
++        return [_recorder_sanitize(v, depth + 1, branch_ancestors) for v in value]
++    out: dict[str, Any] = {}
++    for key, branch in value.items():
++        if depth > 0 and key in RECORDER_OMIT_KEYS:
++            out[key] = _recorder_placeholder("recursive_controller_branch", branch)
++        else:
++            out[key] = _recorder_sanitize(branch, depth + 1, branch_ancestors)
++    return out
++
++def _recorder_json(value: Any) -> str:
++    sanitized = _recorder_sanitize(value)
++    text = canon(sanitized)
++    if len(text) <= RECORDER_MAX_CELL_CHARS:
++        return text
++    summary: dict[str, Any] = {
++        "$omitted": "oversized_recorder_json",
++        "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
++        "serialized_chars": len(text),
++    }
++    if isinstance(sanitized, dict):
++        for key in ("type", "protocol", "authority", "directive", "schema", "control_version", "action_id"):
++            if key in sanitized and not isinstance(sanitized[key], (dict, list)):
++                summary[key] = sanitized[key]
++    return canon(summary)
+ 
+ def _duration_ms(started: str, completed: str) -> str:
+     try:
+@@ -361,8 +422,8 @@
+         str(out.get("directive", "")) if isinstance(out, dict) else "",
+         str(inv["exception"]["type"]) if isinstance(inv.get("exception"), dict) else "",
+         str(inv["exception"]["message"]) if isinstance(inv.get("exception"), dict) else "",
+-        canon(inp),
+-        canon(out),
++        _recorder_json(inp),
++        _recorder_json(out),
+     ]
+ 
+ def reconstruct_invocation_events(state: dict[str, Any]) -> list[dict[str, Any]]:
