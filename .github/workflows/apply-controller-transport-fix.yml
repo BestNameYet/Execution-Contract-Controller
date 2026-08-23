@@ -32,3 +32,4 @@ jobs:
           git add -A
           git commit -m "Compact controller transport and guard recorder recursion"
           git push
+# retrigger after workflow exists on default branch
