@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/build-runtime-artifact.yml"
+      - "runtime-source/repair.trigger"
 
 permissions:
   contents: write
@@ -26,7 +27,7 @@ jobs:
           expected="27e473f0109290a0e3d4d987498d21b83eb74f9914ded3e0528a372cb626dea6"
           test "$actual" = "$expected"
           mv runtime-source/build-runtime-artifact.final.yml .github/workflows/build-runtime-artifact.yml
-          rm -f runtime-source/controller_transport_fix.patch
+          rm -f runtime-source/controller_transport_fix.patch runtime-source/repair.trigger
           rm -f .github/workflows/apply-controller-transport-fix.yml
           rm -f runtime-source/RECOVERY_NOTE.tmp runtime-source/RECOVERY_HOLD.tmp runtime-source/SHOULD_NOT_EXIST.tmp
           git config user.name "github-actions[bot]"
