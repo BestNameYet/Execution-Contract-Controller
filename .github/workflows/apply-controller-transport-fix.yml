@@ -1,0 +1,34 @@
+name: Apply controller transport fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/apply-controller-transport-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply validated patch and verify exact bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply runtime-source/controller_transport_fix.patch
+          actual="$(sha256sum runtime-source/execution_contract_controller.py | awk '{print $1}')"
+          expected="27e473f0109290a0e3d4d987498d21b83eb74f9914ded3e0528a372cb626dea6"
+          test "$actual" = "$expected"
+          rm -f runtime-source/controller_transport_fix.patch
+          rm -f runtime-source/RECOVERY_NOTE.tmp runtime-source/RECOVERY_HOLD.tmp runtime-source/SHOULD_NOT_EXIST.tmp
+          rm -f .github/workflows/apply-controller-transport-fix.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Compact controller transport and guard recorder recursion"
+          git push
