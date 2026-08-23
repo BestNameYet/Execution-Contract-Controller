@@ -1,31 +1,25 @@
 # Runtime Bootstrap
 
-This is the fixed pointer for the current Execution Contract Controller runtime and its execution knowledge base.
+This is the fixed pointer for the current Execution Contract Controller runtime.
 
 ## Current runtime identity
 
 - Repository: `BestNameYet/Execution-Contract-Controller`
-- Exact runtime commit: `871c0c808aa9f5ae5b2889be398bcb7bac8df10d`
-- Controller path: `runtime-source/execution_contract_controller.py`
-- Controller Git blob SHA: `65ada594db71bc9dfdb4c21dad3e838d1b31cbd2`
-- Controller SHA-256: `b5a920426046db63c456db53b43c8c8dc2d0ff4293c21990573bbf4d870eca00`
-- Knowledge-base path: `runtime-source/execution_knowledge_base.json`
-- Knowledge-base Git blob SHA: `97734aec10329f5a6788001383d7c8be8aa8459b`
-- Knowledge-base SHA-256: `fc82218417d59560b916ef910d59907f62e8e2d4d91d2a78bf6e72bfa9297636`
-- Knowledge-base schema/version: `execution-knowledge-base-v1` / `1`
+- Exact source commit: `59c031a57e0d7689e8e6e4a34fa1be4692bedd66`
+- Source path: `runtime-source/execution_contract_controller.py`
+- Git blob SHA: `5fbdba9c3ecb92aaa319f9d2da89e94bbe968a31`
+- SHA-256: `6aafab3cda8152ac81ad42f455c6f3d0ae703b5f991848b55be8f314892a7888`
 
 ## Retrieval and cache rules
 
 1. Read this pointer from `main`.
-2. Treat the controller and knowledge base as one runtime unit. Reuse a cached runtime only when the repository, exact runtime commit, both paths, both Git blob SHAs, both SHA-256 values, and the knowledge-base schema/version all match this pointer.
-3. Otherwise retrieve both files directly from the exact runtime commit:
-   - Controller endpoint: `https://api.github.com/repos/BestNameYet/Execution-Contract-Controller/contents/runtime-source/execution_contract_controller.py?ref=871c0c808aa9f5ae5b2889be398bcb7bac8df10d`
-   - Knowledge-base endpoint: `https://api.github.com/repos/BestNameYet/Execution-Contract-Controller/contents/runtime-source/execution_knowledge_base.json?ref=871c0c808aa9f5ae5b2889be398bcb7bac8df10d`
+2. Reuse a cached controller only when its repository, exact source commit, source path, Git blob SHA, and SHA-256 all match this pointer.
+3. Otherwise retrieve the file directly from the exact commit:
+   - Endpoint: `https://api.github.com/repos/BestNameYet/Execution-Contract-Controller/contents/runtime-source/execution_contract_controller.py?ref=59c031a57e0d7689e8e6e4a34fa1be4692bedd66`
    - Header: `Accept: application/vnd.github.raw+json`
    - Header: `Authorization: Bearer <GitHub token>`
-4. Store both files in the same runtime directory so the controller can resolve `execution_knowledge_base.json` beside `execution_contract_controller.py`.
-5. Verify both Git blob SHAs and both SHA-256 values before invocation.
-6. Retry a fresh initialization against the verified cached runtime first. Re-fetch only if identity changed, either file is missing, or integrity verification fails.
+4. Verify both hashes before invocation.
+5. Retry a fresh initialization against a verified cached file first. Re-fetch only if identity changed, the cache is missing, or integrity verification fails.
 
 Do not use Actions artifacts, ZIP downloads, extraction, artifact IDs, artifact digests, or retention state in the primary delivery path.
 
@@ -37,4 +31,4 @@ For every new prompt, invoke the verified controller with exactly one fresh JSON
 {"schema":"execution-contract-controller-initialization-v1","type":"INITIALIZE","user_prompt":"<exact current user prompt>"}
 ```
 
-Follow the controller payloads for the remainder of the governed turn. The controller performs just-in-time typed knowledge retrieval before materially new action selection; do not preload the full knowledge base into model context.
+Follow the controller payloads for the remainder of the governed turn.
