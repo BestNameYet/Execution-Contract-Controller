@@ -31,6 +31,20 @@ This is the fixed pointer for the current materialized Execution Contract Contro
 
 Do not use Actions artifacts, ZIP delivery, or workflow reconstruction in the runtime path.
 
+## Required event recording
+
+The published controller contains the recursion-safe event recorder. Its transport snapshots remove controller state and recording sidecars, recorder serialization omits recursive controller branches, detects object cycles, limits recursion depth, and caps oversized spreadsheet cell payloads.
+
+Whenever a controller output contains a top-level `recording_instruction`:
+
+1. Treat it as mandatory out-of-band observability, not as a semantic or execution-evaluation step.
+2. Invoke the tool named by `recording_instruction.tool` exactly once with `recording_instruction.api_call` as the arguments. For the current runtime this is `Google_Drive.batch_update_spreadsheet`.
+3. Pass the API call verbatim. Do not reconstruct, summarize, or feed the recording instruction or append result back into the controller.
+4. Execute the append before returning a terminal user response or discarding the controller turn state.
+5. A recording-tool failure does not alter the task's execution verdict. Report the exact recording failure instead of silently dropping the event record.
+
+Terminal COMPLETE/IMPASSE outputs and controller protocol errors carry the batch recording instruction for all controller invocations accumulated in that turn.
+
 ## Required initialization
 
 For every new prompt, invoke the verified controller with exactly one fresh JSON line:
