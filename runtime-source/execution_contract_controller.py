@@ -30,6 +30,7 @@ PROJECT_RECORD_WORKSHEET = "Events"
 PROJECT_RECORD_SHEET_ID = 1930933064
 
 KNOWLEDGE_BASE_PATH = Path(__file__).with_name("execution_knowledge_base.json")
+RUNTIME_MANIFEST_PATH = Path("/mnt/data/execution_runtime/runtime_manifest.json")
 KNOWLEDGE_TYPES = {"invariant", "action", "procedure", "heuristic", "pattern", "capability"}
 
 CONTRACT_PROTOCOL = "compile-contract-v1"
@@ -333,16 +334,24 @@ def _initial_state(inp: dict[str, Any], timestamp_started: str) -> dict[str, Any
 def _sheet_cell(value: str) -> dict[str, Any]:
     return {"userEnteredValue": {"stringValue": value}}
 
+def _duration_ms(started: str, completed: str) -> str:
+    try:
+        a = datetime.fromisoformat(started.replace("Z", "+00:00"))
+        b = datetime.fromisoformat(completed.replace("Z", "+00:00"))
+        return str(max(0, round((b - a).total_seconds() * 1000)))
+    except Exception:
+        return ""
+
 def event_row(event: dict[str, Any]) -> list[str]:
     inv = event["invocation"]
     inp = inv["input"]
     out = inv["output"]
     return [
-        "1",
+        INVOCATION_EVENT_SCHEMA,
         str(event["event_id"]),
         str(event["timestamp_started"]),
         str(event["timestamp_completed"]),
-        "",
+        _duration_ms(str(event["timestamp_started"]), str(event["timestamp_completed"])),
         str(event["turn_id"]),
         str(event["source"]["method"]),
         str(inp.get("type", "")) if isinstance(inp, dict) else "",
@@ -589,23 +598,59 @@ def decision_context(state: dict[str, Any], pid: str, kind: str) -> dict[str, An
         "recent_execution_record": recent,
     }
 
+def _validate_kb_record(item: Any, label: str = "knowledge record") -> dict[str, Any]:
+    item = req_dict(item, label)
+    kid = req_text(item.get("id"), "knowledge id")
+    req_enum(item.get("type"), KNOWLEDGE_TYPES, "knowledge type")
+    req_text(item.get("summary"), f"{kid}.summary")
+    return item
+
+def _load_pending_overlay() -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if not RUNTIME_MANIFEST_PATH.exists():
+        return [], {"available": False, "overlay_version": 0, "pending": 0}
+    manifest = req_dict(json.loads(RUNTIME_MANIFEST_PATH.read_text(encoding="utf-8")), "runtime manifest")
+    if manifest.get("schema") != "execution-runtime-manifest-v1":
+        raise ValueError("invalid runtime manifest schema")
+    overlay_path = RUNTIME_MANIFEST_PATH.with_name("kb_overlay.json")
+    overlay = req_dict(json.loads(overlay_path.read_text(encoding="utf-8")), "runtime knowledge overlay")
+    records = req_list(overlay.get("records"), "overlay records")
+    published_through = int(overlay.get("published_through", 0))
+    if published_through < 0 or published_through > len(records):
+        raise ValueError("invalid overlay published_through")
+    pending = [_validate_kb_record(x, "overlay record") for x in records[published_through:]]
+    return pending, {
+        "available": True,
+        "generation": manifest.get("generation"),
+        "overlay_version": int(overlay.get("version", 0)),
+        "pending": len(pending),
+    }
+
 def _load_kb() -> dict[str, Any]:
     raw = json.loads(KNOWLEDGE_BASE_PATH.read_text(encoding="utf-8"))
     if raw.get("schema") != KNOWLEDGE_SCHEMA:
         raise ValueError("invalid execution knowledge base schema")
     if not isinstance(raw.get("version"), int):
         raise ValueError("invalid execution knowledge base version")
-    records = req_list(raw.get("records"), "knowledge records")
-    ids = set()
-    for item in records:
-        item = req_dict(item, "knowledge record")
-        kid = req_text(item.get("id"), "knowledge id")
-        req_enum(item.get("type"), KNOWLEDGE_TYPES, "knowledge type")
-        if kid in ids:
+    base_records = req_list(raw.get("records"), "knowledge records")
+    merged: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for original in base_records:
+        item = _validate_kb_record(original)
+        kid = item["id"]
+        if kid in merged:
             raise ValueError(f"duplicate knowledge id {kid}")
-        ids.add(kid)
-        req_text(item.get("summary"), f"{kid}.summary")
-    return raw
+        merged[kid] = item
+        order.append(kid)
+    pending, overlay_meta = _load_pending_overlay()
+    for item in pending:
+        kid = item["id"]
+        if kid not in merged:
+            order.append(kid)
+        merged[kid] = item
+    out = deepcopy(raw)
+    out["records"] = [deepcopy(merged[k]) for k in order]
+    out["runtime_overlay"] = overlay_meta
+    return out
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 def _tokens(text: str) -> list[str]:
@@ -655,7 +700,7 @@ def search_knowledge(query: str, requested_types: list[str], top_k: int | None =
     qset = set(qtokens)
     records = [r for r in req_list(kb["records"], "records") if r.get("type") in types]
     if not records:
-        return {"schema": KNOWLEDGE_SCHEMA, "version": kb["version"], "query": query, "types": types, "results": []}
+        return {"schema": KNOWLEDGE_SCHEMA, "version": kb["version"], "runtime_overlay": deepcopy(kb.get("runtime_overlay", {})), "query": query, "types": types, "results": []}
 
     docs = {}
     df = {}
@@ -715,6 +760,7 @@ def search_knowledge(query: str, requested_types: list[str], top_k: int | None =
     return {
         "schema": KNOWLEDGE_SCHEMA,
         "version": kb["version"],
+        "runtime_overlay": deepcopy(kb.get("runtime_overlay", {})),
         "query": query,
         "types": types,
         "results": results,
