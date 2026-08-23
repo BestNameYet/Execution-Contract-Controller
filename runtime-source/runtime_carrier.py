@@ -138,6 +138,12 @@ while running:
             overlay['records'].append(rec); overlay['version']+=1; write_all(); emit_event('KB_APPEND',{'id':rec['id'],'overlay_version':overlay['version']}); respond(conn,{'ok':True,'overlay_version':overlay['version'],'pending':len(overlay['records'])-overlay.get('published_through',0)})
         elif op=='KB_PENDING':
             respond(conn,{'ok':True,'overlay_version':overlay['version'],'records':overlay['records'][overlay.get('published_through',0):]})
+        elif op=='BASE_SET':
+            published=req.get('published_base')
+            if not isinstance(published,dict): raise ValueError('published_base must be object')
+            for key in ('repository','runtime_commit','kb_blob_sha','kb_sha256','kb_schema','kb_version'):
+                if key not in published: raise ValueError(f'published_base.{key} required')
+            BASE_IDENTITY.clear(); BASE_IDENTITY.update(published); atomic(PUBLISHED_BASE,BASE_IDENTITY); write_all(); emit_event('BASE_SET',{'published_base':dict(BASE_IDENTITY)}); respond(conn,{'ok':True,'published_base':dict(BASE_IDENTITY)})
         elif op=='MARK_PUBLISHED':
             published=req.get('published_base')
             if published is not None:
