@@ -140,14 +140,15 @@ jobs:
           retrieval_end = text.index("## Persistent event-state invariant", retrieval_start)
           retrieval = """## Retrieval and cache rules
 
-          1. Read this bootstrap from `main` on every new prompt.
+          1. Read this bootstrap from `main` through the connected GitHub connector on every new prompt.
           2. Read the JSON object in `Published runtime artifact`; this is the current Git publication pointer for the complete runtime unit.
           3. If `/mnt/data/execution_runtime/runtime-publication.json` exists and is exactly equal as parsed JSON to the bootstrap publication JSON, and all five named runtime files are present, reuse the local runtime. Do not hash the extracted files for normal cache reuse.
-          4. Otherwise, require the bootstrap `Artifact URL`, download that published archive through authenticated GitHub access, and extract it directly into `/mnt/data/execution_runtime/`.
-          5. The archive is flat and contains the five runtime files plus `runtime-publication.json` at its root.
-          6. Parse the extracted `/mnt/data/execution_runtime/runtime-publication.json` and require exact JSON equality with the bootstrap publication JSON. If they differ, do not use that extracted runtime.
-          7. After a successful match, keep the extracted JSON beside the runtime files as the local publication pointer. No per-file SHA-256 comparison is required to establish cache freshness.
-          8. If the bootstrap does not yet contain an `Artifact URL`, publication is between its metadata and upload steps; do not use a stale prior artifact location.
+          4. Otherwise, require the bootstrap `Artifact URL` and `Artifact ID`, download that published archive through the connected GitHub connector, and extract it directly into `/mnt/data/execution_runtime/`.
+          5. Never use `git`, `git clone`, `curl`, `wget`, direct GitHub HTTP access, or shell/network substitutes to retrieve GitHub content. GitHub access for this bootstrap is connector-only.
+          6. The archive is flat and contains the five runtime files plus `runtime-publication.json` at its root.
+          7. Parse the extracted `/mnt/data/execution_runtime/runtime-publication.json` and require exact JSON equality with the bootstrap publication JSON. If they differ, do not use that extracted runtime.
+          8. After a successful match, keep the extracted JSON beside the runtime files as the local publication pointer. No per-file SHA-256 comparison is required to establish cache freshness.
+          9. If the bootstrap does not yet contain an `Artifact URL` and `Artifact ID`, publication is between its metadata and upload steps; do not use a stale prior artifact location.
 
           """
           text = text[:retrieval_start] + retrieval + text[retrieval_end:]
