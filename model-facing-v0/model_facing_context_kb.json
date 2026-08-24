@@ -1,6 +1,6 @@
 {
   "schema": "model-facing-context-kb-v1",
-  "version": 3,
+  "version": 4,
   "entries": [
     {
       "id": "context.prompt-to-goal",
@@ -59,17 +59,55 @@
     },
     {
       "id": "context.apply-solver-instruction",
-      "stage": "APPLY_SOLVER_INSTRUCTION",
-      "title": "Apply the synthesized instruction",
-      "summary": "Execute the synthesized solver instruction semantically using the same goal and selected full KB records, and return the executable contract it calls for.",
+      "stage": "DRAFT_EXECUTION_CONTRACT",
+      "title": "Apply the synthesized instruction and draft the contract",
+      "summary": "Execute the synthesized solver instruction semantically using the same goal and selected full KB records, draft the executable contract, and identify which supplied KB records actually informed that draft.",
       "instructions": [
         "Follow the supplied solver instruction as the immediate task instruction.",
         "Use the supplied goal and selected full KB records as its grounding context.",
         "Produce the complete executable Python source as execution_script; do not wrap source in Markdown fences.",
         "The generated Python must write exactly one JSON object to stdout on successful completion and use stderr only for diagnostics or errors.",
         "Produce return_schema as the JSON Schema for that one successful model-facing stdout object.",
-        "The transaction result contains exactly execution_script and return_schema.",
-        "Choose the transition separately as execute, revise, or exit."
+        "Report used_kb_items as only the canonical IDs of supplied KB records that materially informed the contract draft; return an empty array if none were used.",
+        "Do not invent KB IDs and do not include a KB record merely because it was supplied."
+      ]
+    },
+    {
+      "id": "context.inspect-contract-kb-associations",
+      "stage": "POST_DRAFT_KB_QUERY",
+      "title": "Inspect drafted script for additional KB associations",
+      "summary": "Inspect the concrete actions in the drafted execution script and formulate retrieval queries for additional KB knowledge that should be associated with the contract even if it was not needed to draft the script.",
+      "instructions": [
+        "Inspect the actual actions, tools, systems, resources, and execution situations present in execution_script.",
+        "Consider the KB items already reported as used during drafting.",
+        "Write retrieval queries only for additional execution knowledge that should remain associated with the contract because an action in the script may require or benefit from that knowledge.",
+        "Do not rewrite the execution script in this step.",
+        "Do not invent KB IDs.",
+        "Return an empty queries array when no additional association is warranted."
+      ]
+    },
+    {
+      "id": "context.select-contract-kb-associations",
+      "stage": "POST_DRAFT_KB_SELECTION",
+      "title": "Select additional KB records to associate with the contract",
+      "summary": "Choose from deterministically retrieved KB candidates only those records that should be associated with the drafted contract because of actions the script will perform.",
+      "instructions": [
+        "Select by semantic relevance to concrete actions present in execution_script.",
+        "Do not select an item merely because it is lexically similar to the goal.",
+        "Do not select IDs already present in used_kb_items.",
+        "Do not invent or rewrite KB IDs.",
+        "Return an empty additional_kb_items array if none of the candidates should be associated."
+      ]
+    },
+    {
+      "id": "context.finalize-contract",
+      "stage": "FINALIZE_CONTRACT",
+      "title": "Finalize the contract and choose the next transition",
+      "summary": "Accept the machine-finalized contract without alteration and choose the next transaction transition.",
+      "instructions": [
+        "Return the supplied finalized_contract exactly as result; do not alter its execution_script, return_schema, or kb_items.",
+        "Choose transition as execute, revise, or exit.",
+        "The transition is control-plane state and is not part of the contract result."
       ]
     }
   ]
