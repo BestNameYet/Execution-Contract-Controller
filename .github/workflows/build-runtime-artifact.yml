@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths:
-      - '*'
+      - 'runtime-source/**'
 
 permissions:
   contents: write
