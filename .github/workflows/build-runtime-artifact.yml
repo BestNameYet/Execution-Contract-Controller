@@ -37,60 +37,96 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Stage flat runtime unit
-        shell: bash
-        run: |
-          mkdir runtime-artifact
-          cp runtime-source/execution_contract_controller.py runtime-artifact/
-          cp runtime-source/execution_knowledge_base.json runtime-artifact/
-          cp runtime-source/runtime_carrier.py runtime-artifact/
-          cp runtime-source/runtime_client.py runtime-artifact/
-          cp runtime-source/runtime_runner.py runtime-artifact/
-
-      - name: Upload runtime archive
-        id: upload
-        uses: actions/upload-artifact@v4
         with:
-          name: execution-runtime-${{ github.sha }}
-          path: runtime-artifact/*
-          if-no-files-found: error
+          fetch-depth: 0
 
-      - name: Publish artifact pointer to bootstrap
+      - name: Disable runtime sentinel first
         shell: bash
-        env:
-          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
-          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
         run: |
-          export SOURCE_COMMIT="$GITHUB_SHA"
-          export SOURCE_COMMIT_TIME="$(git show -s --format=%cI "$GITHUB_SHA")"
-          export SOURCE_COMMIT_MESSAGE="$(git show -s --format=%s "$GITHUB_SHA")"
-          export PUBLISHED_AT="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-          export ARTIFACT_NAME="execution-runtime-$GITHUB_SHA"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          printf 'false\n' > runtime-control/runtime_gate.txt
+          git add runtime-control/runtime_gate.txt
+          if ! git diff --cached --quiet; then
+            git commit -m "Disable runtime artifact sentinel"
+            git push origin HEAD:main
+          fi
 
+      - name: Create publication metadata record
+        shell: bash
+        run: |
           python - <<'PY'
+          import json
           import os
+          import subprocess
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          files = [
+              "execution_contract_controller.py",
+              "execution_knowledge_base.json",
+              "runtime_carrier.py",
+              "runtime_client.py",
+              "runtime_runner.py",
+          ]
+          source_paths = [f"runtime-source/{name}" for name in files]
+          source_commit = subprocess.check_output(
+              ["git", "log", "-1", "--format=%H", "--", *source_paths],
+              text=True,
+          ).strip()
+
+          def show(fmt):
+              return subprocess.check_output(
+                  ["git", "show", "-s", f"--format={fmt}", source_commit],
+                  text=True,
+              ).strip()
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          run_id = os.environ["GITHUB_RUN_ID"]
+          artifact_name = f"execution-runtime-{source_commit}"
+          record = {
+              "schema": "execution-runtime-publication-v1",
+              "repository": repository,
+              "artifact_name": artifact_name,
+              "artifact_lookup_url": f"https://api.github.com/repos/{repository}/actions/runs/{run_id}/artifacts",
+              "workflow_run_id": run_id,
+              "workflow_run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "workflow_run_url": f"https://github.com/{repository}/actions/runs/{run_id}",
+              "source_commit": source_commit,
+              "source_commit_date_time": show("%cI"),
+              "source_commit_author": show("%an <%ae>"),
+              "source_commit_message": show("%s"),
+              "publication_date_time_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+              "files": files,
+          }
+          Path("runtime-publication.json").write_text(
+              json.dumps(record, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Update bootstrap before bundling
+        shell: bash
+        run: |
+          python - <<'PY'
           from pathlib import Path
 
           path = Path("runtime-bootstrap.md")
-          text = path.read_text()
+          text = path.read_text(encoding="utf-8")
+          record = Path("runtime-publication.json").read_text(encoding="utf-8").rstrip()
 
-          block = f"""<!-- RUNTIME_ARTIFACT_BEGIN -->
+          block = f"""<!-- RUNTIME_PUBLICATION_BEGIN -->
           ## Published runtime artifact
 
-          - Artifact name: `{os.environ['ARTIFACT_NAME']}`
-          - Artifact ID: `{os.environ['ARTIFACT_ID']}`
-          - Artifact URL: `{os.environ['ARTIFACT_URL']}`
-          - Source commit: `{os.environ['SOURCE_COMMIT']}`
-          - Source commit date/time: `{os.environ['SOURCE_COMMIT_TIME']}`
-          - Source commit message: `{os.environ['SOURCE_COMMIT_MESSAGE']}`
-          - Published date/time (UTC): `{os.environ['PUBLISHED_AT']}`
+          ```json
+          {record}
+          ```
 
-          The archive is the five-file runtime unit from the source commit above. Its downloaded ZIP has those five files at the archive root. The source commit is the publication identity; local file SHA-256 checks are not required for cache freshness.
-          <!-- RUNTIME_ARTIFACT_END -->"""
+          The JSON above is the Git pointer for the published runtime archive. The identical JSON is stored inside the archive as `runtime-publication.json`.
+          <!-- RUNTIME_PUBLICATION_END -->"""
 
-          start = "<!-- RUNTIME_ARTIFACT_BEGIN -->"
-          end = "<!-- RUNTIME_ARTIFACT_END -->"
+          start = "<!-- RUNTIME_PUBLICATION_BEGIN -->"
+          end = "<!-- RUNTIME_PUBLICATION_END -->"
           if start in text and end in text:
               a = text.index(start)
               b = text.index(end, a) + len(end)
@@ -99,32 +135,30 @@ jobs:
               marker = "## Retrieval and cache rules"
               text = text.replace(marker, block + "\n\n" + marker, 1)
 
-          retrieval_start = text.index("## Retrieval and cache rules")
-          retrieval_end = text.index("## Persistent event-state invariant", retrieval_start)
-          retrieval = """## Retrieval and cache rules
-
-          1. Read this pointer from `main` on every new prompt.
-          2. Treat the `Published runtime artifact` block as the publication record for the complete five-file runtime unit.
-          3. The artifact `Source commit` is the runtime publication identity. Do not compute or compare SHA-256 values of local runtime files for normal cache freshness.
-          4. Keep a local copy of this bootstrap at `/mnt/data/execution_runtime/runtime-bootstrap.md` after materializing the artifact.
-          5. Reuse the local runtime when all five expected files are present and the local bootstrap's artifact source commit and artifact identity fields match the current repository bootstrap.
-          6. If the local pointer is absent, any expected runtime file is absent, or the artifact publication fields differ, download the artifact identified above and extract its five flat files into `/mnt/data/execution_runtime/`.
-          7. After successful materialization, replace the local bootstrap copy with the current repository bootstrap.
-          8. The artifact source commit determines which repository revision produced all five files; per-file SHA-256 validation is not part of normal cache reuse.
-
-          """
-          text = text[:retrieval_start] + retrieval + text[retrieval_end:]
-          path.write_text(text)
+          path.write_text(text, encoding="utf-8")
           PY
 
-      - name: Commit updated bootstrap pointer
+          git add runtime-bootstrap.md
+          if ! git diff --cached --quiet; then
+            git commit -m "Publish runtime pointer metadata"
+            git push origin HEAD:main
+          fi
+
+      - name: Build flat runtime bundle
         shell: bash
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add runtime-bootstrap.md
-          if git diff --cached --quiet; then
-            exit 0
-          fi
-          git commit -m "Publish runtime artifact ${GITHUB_SHA::12}"
-          git push
+          rm -rf runtime-artifact
+          mkdir runtime-artifact
+          cp runtime-source/execution_contract_controller.py runtime-artifact/
+          cp runtime-source/execution_knowledge_base.json runtime-artifact/
+          cp runtime-source/runtime_carrier.py runtime-artifact/
+          cp runtime-source/runtime_client.py runtime-artifact/
+          cp runtime-source/runtime_runner.py runtime-artifact/
+          cp runtime-publication.json runtime-artifact/
+
+      - name: Upload runtime archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: execution-runtime-${{ github.sha }}
+          path: runtime-artifact/
+          if-no-files-found: error
