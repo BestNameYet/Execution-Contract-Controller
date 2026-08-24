@@ -1,0 +1,26 @@
+{
+  "schema": "transaction-mode-v1",
+  "id": "transactional-knowledge-mode-v0",
+  "initial_transaction": {
+    "automatic": true,
+    "definition_ref": "create_dialogue.json"
+  },
+  "transition_routes": {
+    "execute": {
+      "kind": "execution_from_previous_result",
+      "builder": "execution_definition"
+    },
+    "revise": {
+      "kind": "definition_ref",
+      "definition_ref": "revise_dialogue.json"
+    },
+    "exit": {
+      "kind": "terminal"
+    }
+  },
+  "planes": {
+    "data": "transaction outcome.result; validated by the active transaction return_schema and the only transaction result exposed to the model",
+    "control": "transaction outcome.transition; consumed only by the mode controller to select the next transaction",
+    "record": "transaction outcome.receipt; retained for provenance and evaluation and never included in the model-facing result"
+  }
+}
