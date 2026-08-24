@@ -25,12 +25,20 @@ This is the fixed pointer for the current Execution Contract Controller runtime,
 
 ## Retrieval and cache rules
 
-1. Read this pointer from `main`.
-2. Treat all five runtime-source files above as one published runtime unit.
-3. Reuse a cached unit only when repository, exact runtime commit, paths, blob SHAs, SHA-256 values, and KB schema/version all match this pointer.
-4. Otherwise retrieve each file directly from the exact runtime commit through the GitHub contents API with `Accept: application/vnd.github.raw+json` and authenticated access.
-5. Store all five files together in `/mnt/data/execution_runtime/` and verify their identities before invocation.
-6. Do not apply controller patches or reconstruct runtime files from Actions artifacts.
+1. Read this pointer from `main` on every new prompt.
+2. Keep a local copy of this pointer at `/mnt/data/execution_runtime/runtime-bootstrap.md` after a runtime unit has been successfully materialized.
+3. Treat the following values as the bootstrap identity fields for cache-version comparison:
+   - repository;
+   - exact runtime commit;
+   - all five runtime-source paths;
+   - all five Git blob SHAs;
+   - all five published SHA-256 values;
+   - knowledge-base schema and version.
+4. Reuse the cached runtime unit when all five expected runtime files are present and the bootstrap identity fields in the local pointer copy exactly match the bootstrap identity fields in the current repository pointer.
+5. Do not compute or compare SHA-256 values of the local runtime files as part of normal cache reuse. The SHA-256 values published above are pointer identity metadata; comparing the local pointer fields to the repository pointer is sufficient to detect a published runtime change.
+6. If the local pointer is absent, any expected runtime file is absent, or any bootstrap identity field differs, treat the cached unit as stale and retrieve all five runtime-source files directly from the exact runtime commit through authenticated GitHub access. Store all five files together in `/mnt/data/execution_runtime/`.
+7. Only after that runtime unit is successfully materialized, replace `/mnt/data/execution_runtime/runtime-bootstrap.md` with the current repository pointer so the local pointer records the exact published identity that produced the cached unit.
+8. Do not apply controller patches or reconstruct runtime files from Actions artifacts.
 
 ## Persistent event-state invariant
 
@@ -52,9 +60,9 @@ python /mnt/data/execution_runtime/runtime_client.py EVENTS_GET '{"after_sequenc
 
 Before the first governed invocation in a runtime:
 
-1. Verify the five cached files against this pointer.
-2. If `/mnt/data/execution_runtime/runtime_manifest.json` exists, use the verified client to `PING` the carrier.
-3. If no carrier responds, stop any stale process if possible and start the verified carrier detached:
+1. Confirm that all five expected runtime files are present and that the local bootstrap identity fields exactly match the current repository bootstrap identity fields. Do not rehash the local runtime files for this cache check.
+2. If `/mnt/data/execution_runtime/runtime_manifest.json` exists, use the cached client to `PING` the carrier.
+3. If no carrier responds, stop any stale process if possible and start the cached carrier detached:
 
 ```bash
 nohup python /mnt/data/execution_runtime/runtime_carrier.py \
@@ -73,7 +81,7 @@ The carrier owns `runtime_state.json`, `kb_overlay.json`, `runtime_manifest.json
 
 ## Required invocation
 
-For every new prompt, invoke the verified runner with exactly one fresh JSON line:
+For every new prompt, invoke the cached runner with exactly one fresh JSON line:
 
 ```json
 {"schema":"execution-contract-controller-initialization-v1","type":"INITIALIZE","user_prompt":"<exact current user prompt>"}
