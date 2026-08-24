@@ -22,6 +22,34 @@ Never invoke `git`, `git clone`, `curl`, `wget`, direct unauthenticated GitHub H
 
 The authoritative runtime publication identity is the JSON object written into the `Published runtime artifact` block by the artifact workflow. Do not reconstruct publication identity from legacy per-file bootstrap hashes.
 
+<!-- RUNTIME_PUBLICATION_BEGIN -->
+## Published runtime artifact
+
+```json
+{
+  "artifact_name": "execution-runtime-4d5486304e0d2bbaede754fe4a350a5d368b5c35",
+  "files": [
+    "execution_contract_controller.py",
+    "execution_knowledge_base.json",
+    "runtime_carrier.py",
+    "runtime_client.py",
+    "runtime_runner.py"
+  ],
+  "publication_date_time_utc": "2026-08-24T22:54:51Z",
+  "repository": "BestNameYet/Execution-Contract-Controller",
+  "schema": "execution-runtime-publication-v1",
+  "source_commit": "4d5486304e0d2bbaede754fe4a350a5d368b5c35",
+  "source_commit_author": "BestNameYet <samuel.john.nixon@gmail.com>",
+  "source_commit_date_time": "2026-08-24T15:54:31-07:00",
+  "source_commit_message": "Trigger runtime artifact publication",
+  "workflow_run_attempt": "1",
+  "workflow_run_id": "32786887021"
+}
+```
+
+The JSON above is the Git publication pointer. The archive contains the identical JSON as `runtime-publication.json`. The artifact URL and artifact ID are bootstrap-only transport fields and are added after upload; until then no artifact location is published.
+<!-- RUNTIME_PUBLICATION_END -->
+
 ## Retrieval and cache rules
 
 1. Read this bootstrap from `main` through the connected GitHub connector on every new prompt.
@@ -32,7 +60,7 @@ The authoritative runtime publication identity is the JSON object written into t
 6. The archive is flat and contains the five runtime files plus `runtime-publication.json` at its root.
 7. Parse the extracted `/mnt/data/execution_runtime/runtime-publication.json` and require exact JSON equality with the bootstrap publication JSON. If they differ, do not use that extracted runtime.
 8. After a successful match, keep the extracted JSON beside the runtime files as the local publication pointer. No per-file SHA-256 comparison is required to establish cache freshness.
-9. If the bootstrap does not yet contain an `Artifact URL` and `Artifact ID`, publication is between its metadata and upload steps, or the first publication under this scheme has not completed. Do not use a stale prior artifact location or reconstruct an unpublished artifact.
+9. If the bootstrap does not yet contain an `Artifact URL` and `Artifact ID`, publication is between its metadata and upload steps; do not use a stale prior artifact location.
 
 ## Persistent event-state invariant
 
