@@ -1,8 +1,9 @@
 {
-  "schema": "dialogue-definition-v1",
-  "id": "create-dialogue-v1",
+  "schema": "transaction-definition-v1",
+  "id": "create",
   "title": "Create executable contract",
-  "purpose": "Run the model-facing CREATE dialogue that turns the current user prompt into a model-authored executable Python contract using mandatory context injection, deterministic execution-KB retrieval, semantic topic selection, and a fixed terminal dialogue product.",
+  "kind": "dialogue",
+  "entry": "initial",
   "script": {
     "ref": "create_dialogue.py",
     "language": "python",
@@ -19,6 +20,37 @@
     "execution_kb": "execution_knowledge_base.json",
     "mandatory_context_kb": "model_facing_context_kb.json"
   },
+  "return_schema": {
+    "type": "object",
+    "required": [
+      "execution_script",
+      "return_schema"
+    ],
+    "properties": {
+      "execution_script": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Complete Python source for the execution transaction."
+      },
+      "return_schema": {
+        "type": "object",
+        "description": "JSON Schema for the model-facing result of the execution transaction."
+      }
+    },
+    "additionalProperties": false
+  },
+  "completion": {
+    "source": "last_model_stdin_object",
+    "envelope": {
+      "result_field": "result",
+      "transition_field": "transition"
+    }
+  },
+  "allowed_transitions": [
+    "execute",
+    "revise",
+    "exit"
+  ],
   "dialogue": {
     "model_visible_flow": [
       "WELCOME_AND_USER_PROMPT",
@@ -34,48 +66,10 @@
       "Run the queries deterministically and expose compact selectable KB topic projections plus the mandatory topic-selection KB entry.",
       "Resolve the model-selected topic IDs to their full canonical KB records.",
       "Inject the full selected KB records plus the mandatory execution-script construction KB entry.",
-      "Request the executable Python contract and the next lifecycle choice: execute, revise, or exit.",
-      "Exit successfully without another stdout message so the transaction wrapper can use the last model stdin object as the dialogue product."
+      "Request a terminal outcome envelope containing result and transition.",
+      "The result must be the executable contract and is validated only by this transaction's return_schema.",
+      "The transition is consumed by the higher-level mode controller and is not part of the model-facing result.",
+      "The transaction receipt is generated separately by the transaction runtime and is not part of the model-facing result."
     ]
-  },
-  "terminal_output": {
-    "source": "last_model_stdin_object",
-    "schema": {
-      "type": "object",
-      "required": [
-        "contract",
-        "next_action"
-      ],
-      "properties": {
-        "contract": {
-          "type": "object",
-          "required": [
-            "execution_script",
-            "return_schema"
-          ],
-          "properties": {
-            "execution_script": {
-              "type": "string",
-              "minLength": 1,
-              "description": "Complete Python source for the execution phase. On successful completion it must write exactly one JSON value to stdout."
-            },
-            "return_schema": {
-              "type": "object",
-              "description": "JSON Schema for the execution script's one successful stdout JSON value. The root execution result type must be object."
-            }
-          },
-          "additionalProperties": false
-        },
-        "next_action": {
-          "type": "string",
-          "enum": [
-            "execute",
-            "revise",
-            "exit"
-          ]
-        }
-      },
-      "additionalProperties": false
-    }
   }
 }
