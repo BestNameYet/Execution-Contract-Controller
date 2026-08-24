@@ -69,7 +69,14 @@ def next_transaction(
     if kind == "terminal":
         return None
     if kind == "execution_from_previous_result":
-        return execution_definition(outcome.result)
+        definition = execution_definition(outcome.result)
+        kb_items = outcome.result.get("kb_items", []) if isinstance(outcome.result, dict) else []
+        if not isinstance(kb_items, list) or not all(isinstance(item, str) and item for item in kb_items):
+            raise ModeError("execution contract kb_items must be an array of non-empty canonical KB IDs")
+        if len(set(kb_items)) != len(kb_items):
+            raise ModeError("execution contract kb_items must be unique")
+        definition["contract_context"] = {"kb_items": kb_items}
+        return definition
     if kind == "definition_ref":
         ref = route.get("definition_ref")
         if not isinstance(ref, str) or not ref:
