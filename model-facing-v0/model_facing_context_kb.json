@@ -1,0 +1,45 @@
+{
+  "schema": "model-facing-context-kb-v1",
+  "version": 1,
+  "entries": [
+    {
+      "id": "context.prompt-to-goal",
+      "stage": "PROMPT_TO_GOAL",
+      "title": "Convert the user prompt to a goal",
+      "summary": "Produce a concise execution goal that preserves the requested end state, scope, constraints, and explicit exclusions without adding process requirements.",
+      "instructions": [
+        "Treat the user prompt as authoritative source material.",
+        "State what must be accomplished, not a plan for accomplishing it.",
+        "Preserve material scope limits, required outputs, and explicit exclusions.",
+        "Do not add verification, planning, research, or prerequisites unless the prompt itself makes them part of the requested end state.",
+        "Return only the goal in the required response shape."
+      ]
+    },
+    {
+      "id": "context.goal-to-query",
+      "stage": "GOAL_TO_QUERY",
+      "title": "Convert the goal to knowledge-base queries",
+      "summary": "Translate the current goal into concise retrieval language likely to surface useful execution knowledge from the execution KB.",
+      "instructions": [
+        "Write queries for knowledge that would help accomplish the goal; do not solve the goal in this step.",
+        "Use concrete verbs, objects, execution situations, capabilities, and constraints that are likely to occur in KB retrieval fields.",
+        "Use more than one query when materially different execution knowledge may be needed.",
+        "Do not invent KB identifiers.",
+        "Return only the query list in the required response shape."
+      ]
+    },
+    {
+      "id": "context.select-topics",
+      "stage": "TOPIC_SELECTION",
+      "title": "Select useful retrieved KB topics",
+      "summary": "Choose the retrieved KB records whose full contents should be supplied as task context for the next phase.",
+      "instructions": [
+        "Select by semantic usefulness to the stated goal, not merely lexical similarity.",
+        "A topic is a retrieved KB record represented by its canonical record ID, type, and summary.",
+        "Select every candidate that may materially inform execution; selection is not a requirement to use every selected record later.",
+        "Do not invent or rewrite topic IDs.",
+        "Return only IDs present in the supplied candidate list."
+      ]
+    }
+  ]
+}
