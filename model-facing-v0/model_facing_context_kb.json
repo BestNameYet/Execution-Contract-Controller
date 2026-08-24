@@ -1,6 +1,6 @@
 {
   "schema": "model-facing-context-kb-v1",
-  "version": 1,
+  "version": 2,
   "entries": [
     {
       "id": "context.prompt-to-goal",
@@ -39,6 +39,21 @@
         "Select every candidate that may materially inform execution; selection is not a requirement to use every selected record later.",
         "Do not invent or rewrite topic IDs.",
         "Return only IDs present in the supplied candidate list."
+      ]
+    },
+    {
+      "id": "context.write-execution-script",
+      "stage": "WRITE_EXECUTION_SCRIPT",
+      "title": "Write the executable transaction contract",
+      "summary": "Use the user prompt, derived goal, and supplied full KB records as context to produce the complete executable Python script and the JSON Schema for its successful result.",
+      "instructions": [
+        "Treat the original user prompt and goal as authoritative for the requested outcome.",
+        "Use the supplied KB records as execution context. They inform the script but do not require use of every supplied record.",
+        "Return the complete executable Python source as the execution_script string. Do not wrap the source in Markdown fences.",
+        "The generated Python script must write exactly one JSON object to stdout on successful completion.",
+        "The generated Python script must reserve stderr for diagnostics and errors rather than mixing diagnostics into the successful stdout result.",
+        "Return return_schema as a JSON Schema object describing the successful stdout JSON object.",
+        "The script and return schema together form the contract. Do not add fields to the contract beyond execution_script and return_schema."
       ]
     }
   ]
