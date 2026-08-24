@@ -1,6 +1,6 @@
 {
   "schema": "model-facing-context-kb-v1",
-  "version": 2,
+  "version": 3,
   "entries": [
     {
       "id": "context.prompt-to-goal",
@@ -42,18 +42,34 @@
       ]
     },
     {
-      "id": "context.write-execution-script",
-      "stage": "WRITE_EXECUTION_SCRIPT",
-      "title": "Write the executable transaction contract",
-      "summary": "Use the user prompt, derived goal, and supplied full KB records as context to produce the complete executable Python script and the JSON Schema for its successful result.",
+      "id": "context.synthesize-solver-instruction",
+      "stage": "SYNTHESIZE_SOLVER_INSTRUCTION",
+      "title": "Synthesize the instruction that will solve the goal",
+      "summary": "Given the execution goal and the selected full KB records, construct the complete instruction that a model should follow to solve the goal under that supplied knowledge and produce the required executable contract.",
       "instructions": [
-        "Treat the original user prompt and goal as authoritative for the requested outcome.",
-        "Use the supplied KB records as execution context. They inform the script but do not require use of every supplied record.",
-        "Return the complete executable Python source as the execution_script string. Do not wrap the source in Markdown fences.",
-        "The generated Python script must write exactly one JSON object to stdout on successful completion.",
-        "The generated Python script must reserve stderr for diagnostics and errors rather than mixing diagnostics into the successful stdout result.",
-        "Return return_schema as a JSON Schema object describing the successful stdout JSON object.",
-        "The script and return schema together form the contract. Do not add fields to the contract beyond execution_script and return_schema."
+        "Treat the goal as the required end state and the selected KB records as the operative execution context.",
+        "Construct an instruction for solving the goal; do not solve the goal in this step.",
+        "The instruction must tell the next model step to use the supplied goal and KB context to determine the concrete execution needed.",
+        "The instruction must require a complete executable Python script, not a plan or explanation.",
+        "The instruction must require the Python script to write exactly one JSON object to stdout on successful completion and reserve stderr for diagnostics.",
+        "The instruction must require a JSON Schema describing that successful model-facing result.",
+        "Do not add requirements that are not supported by the goal or supplied KB context.",
+        "Return only the synthesized instruction in the required response shape."
+      ]
+    },
+    {
+      "id": "context.apply-solver-instruction",
+      "stage": "APPLY_SOLVER_INSTRUCTION",
+      "title": "Apply the synthesized instruction",
+      "summary": "Execute the synthesized solver instruction semantically using the same goal and selected full KB records, and return the executable contract it calls for.",
+      "instructions": [
+        "Follow the supplied solver instruction as the immediate task instruction.",
+        "Use the supplied goal and selected full KB records as its grounding context.",
+        "Produce the complete executable Python source as execution_script; do not wrap source in Markdown fences.",
+        "The generated Python must write exactly one JSON object to stdout on successful completion and use stderr only for diagnostics or errors.",
+        "Produce return_schema as the JSON Schema for that one successful model-facing stdout object.",
+        "The transaction result contains exactly execution_script and return_schema.",
+        "Choose the transition separately as execute, revise, or exit."
       ]
     }
   ]
