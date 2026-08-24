@@ -35,6 +35,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build runtime artifact
+      - name: Build flat runtime archive
+        shell: bash
         run: |
-          echo "runtime artifact build placeholder"
+          zip -j runtime-artifact.zip \
+            runtime-source/execution_contract_controller.py \
+            runtime-source/execution_knowledge_base.json \
+            runtime-source/runtime_carrier.py \
+            runtime-source/runtime_client.py \
+            runtime-source/runtime_runner.py
