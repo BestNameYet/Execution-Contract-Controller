@@ -1,0 +1,81 @@
+{
+  "schema": "dialogue-definition-v1",
+  "id": "create-dialogue-v1",
+  "title": "Create executable contract",
+  "purpose": "Run the model-facing CREATE dialogue that turns the current user prompt into a model-authored executable Python contract using mandatory context injection, deterministic execution-KB retrieval, semantic topic selection, and a fixed terminal dialogue product.",
+  "script": {
+    "ref": "create_dialogue.py",
+    "language": "python",
+    "transport": "newline-delimited JSON over stdin/stdout",
+    "stderr": "diagnostics only",
+    "metadata_channel": {
+      "kind": "inherited file descriptor",
+      "env": "TRANSACTION_META_FD",
+      "format": "newline-delimited JSON",
+      "model_visible": false
+    }
+  },
+  "resources": {
+    "execution_kb": "execution_knowledge_base.json",
+    "mandatory_context_kb": "model_facing_context_kb.json"
+  },
+  "dialogue": {
+    "model_visible_flow": [
+      "WELCOME_AND_USER_PROMPT",
+      "PROMPT_TO_GOAL",
+      "GOAL_TO_QUERY",
+      "TOPIC_SELECTION",
+      "WRITE_EXECUTION_SCRIPT"
+    ],
+    "semantics": [
+      "Ask the model for the exact current user prompt.",
+      "Inject the mandatory prompt-to-goal KB entry and request a goal.",
+      "Inject the mandatory goal-to-query KB entry and request execution-KB queries.",
+      "Run the queries deterministically and expose compact selectable KB topic projections plus the mandatory topic-selection KB entry.",
+      "Resolve the model-selected topic IDs to their full canonical KB records.",
+      "Inject the full selected KB records plus the mandatory execution-script construction KB entry.",
+      "Request the executable Python contract and the next lifecycle choice: execute, revise, or exit.",
+      "Exit successfully without another stdout message so the transaction wrapper can use the last model stdin object as the dialogue product."
+    ]
+  },
+  "terminal_output": {
+    "source": "last_model_stdin_object",
+    "schema": {
+      "type": "object",
+      "required": [
+        "contract",
+        "next_action"
+      ],
+      "properties": {
+        "contract": {
+          "type": "object",
+          "required": [
+            "execution_script",
+            "return_schema"
+          ],
+          "properties": {
+            "execution_script": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Complete Python source for the execution phase. On successful completion it must write exactly one JSON value to stdout."
+            },
+            "return_schema": {
+              "type": "object",
+              "description": "JSON Schema for the execution script's one successful stdout JSON value. The root execution result type must be object."
+            }
+          },
+          "additionalProperties": false
+        },
+        "next_action": {
+          "type": "string",
+          "enum": [
+            "execute",
+            "revise",
+            "exit"
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
