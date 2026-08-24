@@ -2,6 +2,12 @@
 
 This is the fixed pointer for the current Execution Contract Controller runtime, persistent carrier, runner, client, and execution knowledge base.
 
+## GitHub access invariant
+
+For every GitHub read, download, lookup, or mutation required by this bootstrap, use the connected GitHub connector only.
+
+Never invoke `git`, `git clone`, `curl`, `wget`, direct unauthenticated GitHub HTTP access, or any other shell/network substitute from the execution environment to access GitHub. Local shell commands may operate only on files already materialized in the execution environment.
+
 ## Current runtime identity
 
 - Repository: `BestNameYet/Execution-Contract-Controller`
@@ -25,20 +31,15 @@ This is the fixed pointer for the current Execution Contract Controller runtime,
 
 ## Retrieval and cache rules
 
-1. Read this pointer from `main` on every new prompt.
-2. Keep a local copy of this pointer at `/mnt/data/execution_runtime/runtime-bootstrap.md` after a runtime unit has been successfully materialized.
-3. Treat the following values as the bootstrap identity fields for cache-version comparison:
-   - repository;
-   - exact runtime commit;
-   - all five runtime-source paths;
-   - all five Git blob SHAs;
-   - all five published SHA-256 values;
-   - knowledge-base schema and version.
-4. Reuse the cached runtime unit when all five expected runtime files are present and the bootstrap identity fields in the local pointer copy exactly match the bootstrap identity fields in the current repository pointer.
-5. Do not compute or compare SHA-256 values of the local runtime files as part of normal cache reuse. The SHA-256 values published above are pointer identity metadata; comparing the local pointer fields to the repository pointer is sufficient to detect a published runtime change.
-6. If the local pointer is absent, any expected runtime file is absent, or any bootstrap identity field differs, treat the cached unit as stale and retrieve all five runtime-source files directly from the exact runtime commit through authenticated GitHub access. Store all five files together in `/mnt/data/execution_runtime/`.
-7. Only after that runtime unit is successfully materialized, replace `/mnt/data/execution_runtime/runtime-bootstrap.md` with the current repository pointer so the local pointer records the exact published identity that produced the cached unit.
-8. Do not apply controller patches or reconstruct runtime files from Actions artifacts.
+1. Read this bootstrap from `main` through the connected GitHub connector on every new prompt.
+2. When a `Published runtime artifact` block is present, read its JSON object as the current Git publication pointer for the complete runtime unit.
+3. If `/mnt/data/execution_runtime/runtime-publication.json` exists, all five named runtime files are present, and the local publication JSON is exactly equal as parsed JSON to the bootstrap publication JSON, reuse the local runtime. Do not hash the extracted files for normal cache reuse.
+4. Otherwise require the bootstrap `Artifact URL` and `Artifact ID`, download that artifact through the connected GitHub connector, and extract the flat archive directly into `/mnt/data/execution_runtime/`.
+5. The published archive contains the five runtime files plus `runtime-publication.json` at its root.
+6. Parse the extracted `/mnt/data/execution_runtime/runtime-publication.json` and require exact JSON equality with the bootstrap publication JSON. If they differ, do not use that extracted runtime.
+7. After a successful match, keep `runtime-publication.json` beside the five runtime files as the local publication pointer. No per-file SHA-256 comparison is required to establish cache freshness.
+8. If a `Published runtime artifact` block exists but its artifact URL/ID are absent, publication is between its metadata and upload steps. Do not use any previous artifact location; retry the bootstrap on the next prompt or after publication completes.
+9. If no `Published runtime artifact` block exists yet, the repository has not completed its first artifact publication under this scheme. Do not reconstruct the runtime from an Actions artifact that is not explicitly published by this bootstrap, and do not use shell GitHub access as a fallback.
 
 ## Persistent event-state invariant
 
@@ -60,7 +61,7 @@ python /mnt/data/execution_runtime/runtime_client.py EVENTS_GET '{"after_sequenc
 
 Before the first governed invocation in a runtime:
 
-1. Confirm that all five expected runtime files are present and that the local bootstrap identity fields exactly match the current repository bootstrap identity fields. Do not rehash the local runtime files for this cache check.
+1. Confirm that all five expected runtime files are present and, when artifact publication metadata exists, that local `runtime-publication.json` exactly matches the bootstrap publication JSON. Do not rehash the local runtime files for this cache check.
 2. If `/mnt/data/execution_runtime/runtime_manifest.json` exists, use the cached client to `PING` the carrier.
 3. If no carrier responds, stop any stale process if possible and start the cached carrier detached:
 
