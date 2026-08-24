@@ -89,10 +89,8 @@ jobs:
               "schema": "execution-runtime-publication-v1",
               "repository": repository,
               "artifact_name": artifact_name,
-              "artifact_lookup_url": f"https://api.github.com/repos/{repository}/actions/runs/{run_id}/artifacts",
               "workflow_run_id": run_id,
               "workflow_run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
-              "workflow_run_url": f"https://github.com/{repository}/actions/runs/{run_id}",
               "source_commit": source_commit,
               "source_commit_date_time": show("%cI"),
               "source_commit_author": show("%an <%ae>"),
@@ -108,7 +106,7 @@ jobs:
               output.write(f"artifact_name={artifact_name}\n")
           PY
 
-      - name: Update bootstrap before bundling
+      - name: Update bootstrap pointer before bundling
         shell: bash
         run: |
           python - <<'PY'
@@ -125,7 +123,10 @@ jobs:
           {record}
           ```
 
-          The JSON above is the Git pointer for the published runtime archive. The identical JSON is stored inside the archive as `runtime-publication.json`.
+          - Artifact URL: `PENDING_UPLOAD`
+          - Artifact ID: `PENDING_UPLOAD`
+
+          The JSON above is the Git publication pointer. The archive contains the identical JSON as `runtime-publication.json`. The artifact URL and artifact ID are bootstrap-only transport fields and are added after upload; they are not part of the JSON identity comparison.
           <!-- RUNTIME_PUBLICATION_END -->"""
 
           start = "<!-- RUNTIME_PUBLICATION_BEGIN -->"
@@ -138,6 +139,20 @@ jobs:
               marker = "## Retrieval and cache rules"
               text = text.replace(marker, block + "\n\n" + marker, 1)
 
+          retrieval_start = text.index("## Retrieval and cache rules")
+          retrieval_end = text.index("## Persistent event-state invariant", retrieval_start)
+          retrieval = """## Retrieval and cache rules
+
+          1. Read this bootstrap from `main` on every new prompt.
+          2. Read the JSON object in `Published runtime artifact`; this is the current Git publication pointer for the complete runtime unit.
+          3. If `/mnt/data/execution_runtime/runtime-publication.json` exists and is exactly equal as parsed JSON to the bootstrap publication JSON, and all five named runtime files are present, reuse the local runtime. Do not hash the extracted files for normal cache reuse.
+          4. Otherwise, use the bootstrap `Artifact URL` to download the published archive through authenticated GitHub access.
+          5. Extract the archive directly into `/mnt/data/execution_runtime/`. The archive is flat and contains the five runtime files plus `runtime-publication.json` at its root.
+          6. Parse the extracted `/mnt/data/execution_runtime/runtime-publication.json` and require exact JSON equality with the bootstrap publication JSON. If they differ, do not use that extracted runtime.
+          7. After a successful match, keep the extracted JSON beside the runtime files as the local publication pointer. No per-file SHA-256 comparison is required to establish cache freshness.
+
+          """
+          text = text[:retrieval_start] + retrieval + text[retrieval_end:]
           path.write_text(text, encoding="utf-8")
           PY
 
@@ -160,8 +175,40 @@ jobs:
           cp runtime-publication.json runtime-artifact/
 
       - name: Upload runtime archive
+        id: upload
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.metadata.outputs.artifact_name }}
           path: runtime-artifact/
           if-no-files-found: error
+
+      - name: Add uploaded artifact location to bootstrap
+        shell: bash
+        env:
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          path = Path("runtime-bootstrap.md")
+          text = path.read_text(encoding="utf-8")
+          text = text.replace(
+              "- Artifact URL: `PENDING_UPLOAD`",
+              f"- Artifact URL: `{os.environ['ARTIFACT_URL']}`",
+              1,
+          )
+          text = text.replace(
+              "- Artifact ID: `PENDING_UPLOAD`",
+              f"- Artifact ID: `{os.environ['ARTIFACT_ID']}`",
+              1,
+          )
+          path.write_text(text, encoding="utf-8")
+          PY
+
+          git add runtime-bootstrap.md
+          if ! git diff --cached --quiet; then
+            git commit -m "Add runtime artifact location"
+            git push origin HEAD:main
+          fi
