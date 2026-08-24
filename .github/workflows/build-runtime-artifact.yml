@@ -53,6 +53,7 @@ jobs:
           fi
 
       - name: Create publication metadata record
+        id: metadata
         shell: bash
         run: |
           python - <<'PY'
@@ -103,6 +104,8 @@ jobs:
               json.dumps(record, indent=2, sort_keys=True) + "\n",
               encoding="utf-8",
           )
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"artifact_name={artifact_name}\n")
           PY
 
       - name: Update bootstrap before bundling
@@ -159,6 +162,6 @@ jobs:
       - name: Upload runtime archive
         uses: actions/upload-artifact@v4
         with:
-          name: execution-runtime-${{ github.sha }}
+          name: ${{ steps.metadata.outputs.artifact_name }}
           path: runtime-artifact/
           if-no-files-found: error
