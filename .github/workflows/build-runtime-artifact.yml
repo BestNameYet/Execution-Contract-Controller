@@ -7,6 +7,9 @@ on:
     paths:
       - '*'
 
+permissions:
+  contents: write
+
 jobs:
   check-sentinel:
     runs-on: ubuntu-latest
@@ -35,12 +38,93 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build flat runtime archive
+      - name: Stage flat runtime unit
         shell: bash
         run: |
-          zip -j runtime-artifact.zip \
-            runtime-source/execution_contract_controller.py \
-            runtime-source/execution_knowledge_base.json \
-            runtime-source/runtime_carrier.py \
-            runtime-source/runtime_client.py \
-            runtime-source/runtime_runner.py
+          mkdir runtime-artifact
+          cp runtime-source/execution_contract_controller.py runtime-artifact/
+          cp runtime-source/execution_knowledge_base.json runtime-artifact/
+          cp runtime-source/runtime_carrier.py runtime-artifact/
+          cp runtime-source/runtime_client.py runtime-artifact/
+          cp runtime-source/runtime_runner.py runtime-artifact/
+
+      - name: Upload runtime archive
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: execution-runtime-${{ github.sha }}
+          path: runtime-artifact/*
+          if-no-files-found: error
+
+      - name: Publish artifact pointer to bootstrap
+        shell: bash
+        env:
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+        run: |
+          export SOURCE_COMMIT="$GITHUB_SHA"
+          export SOURCE_COMMIT_TIME="$(git show -s --format=%cI "$GITHUB_SHA")"
+          export SOURCE_COMMIT_MESSAGE="$(git show -s --format=%s "$GITHUB_SHA")"
+          export PUBLISHED_AT="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          export ARTIFACT_NAME="execution-runtime-$GITHUB_SHA"
+
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          path = Path("runtime-bootstrap.md")
+          text = path.read_text()
+
+          block = f"""<!-- RUNTIME_ARTIFACT_BEGIN -->
+          ## Published runtime artifact
+
+          - Artifact name: `{os.environ['ARTIFACT_NAME']}`
+          - Artifact ID: `{os.environ['ARTIFACT_ID']}`
+          - Artifact URL: `{os.environ['ARTIFACT_URL']}`
+          - Source commit: `{os.environ['SOURCE_COMMIT']}`
+          - Source commit date/time: `{os.environ['SOURCE_COMMIT_TIME']}`
+          - Source commit message: `{os.environ['SOURCE_COMMIT_MESSAGE']}`
+          - Published date/time (UTC): `{os.environ['PUBLISHED_AT']}`
+
+          The archive is the five-file runtime unit from the source commit above. Its downloaded ZIP has those five files at the archive root. The source commit is the publication identity; local file SHA-256 checks are not required for cache freshness.
+          <!-- RUNTIME_ARTIFACT_END -->"""
+
+          start = "<!-- RUNTIME_ARTIFACT_BEGIN -->"
+          end = "<!-- RUNTIME_ARTIFACT_END -->"
+          if start in text and end in text:
+              a = text.index(start)
+              b = text.index(end, a) + len(end)
+              text = text[:a] + block + text[b:]
+          else:
+              marker = "## Retrieval and cache rules"
+              text = text.replace(marker, block + "\n\n" + marker, 1)
+
+          retrieval_start = text.index("## Retrieval and cache rules")
+          retrieval_end = text.index("## Persistent event-state invariant", retrieval_start)
+          retrieval = """## Retrieval and cache rules
+
+          1. Read this pointer from `main` on every new prompt.
+          2. Treat the `Published runtime artifact` block as the publication record for the complete five-file runtime unit.
+          3. The artifact `Source commit` is the runtime publication identity. Do not compute or compare SHA-256 values of local runtime files for normal cache freshness.
+          4. Keep a local copy of this bootstrap at `/mnt/data/execution_runtime/runtime-bootstrap.md` after materializing the artifact.
+          5. Reuse the local runtime when all five expected files are present and the local bootstrap's artifact source commit and artifact identity fields match the current repository bootstrap.
+          6. If the local pointer is absent, any expected runtime file is absent, or the artifact publication fields differ, download the artifact identified above and extract its five flat files into `/mnt/data/execution_runtime/`.
+          7. After successful materialization, replace the local bootstrap copy with the current repository bootstrap.
+          8. The artifact source commit determines which repository revision produced all five files; per-file SHA-256 validation is not part of normal cache reuse.
+
+          """
+          text = text[:retrieval_start] + retrieval + text[retrieval_end:]
+          path.write_text(text)
+          PY
+
+      - name: Commit updated bootstrap pointer
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add runtime-bootstrap.md
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "Publish runtime artifact ${GITHUB_SHA::12}"
+          git push
