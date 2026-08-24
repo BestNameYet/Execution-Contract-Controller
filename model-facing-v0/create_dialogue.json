@@ -5,7 +5,7 @@
   "kind": "dialogue",
   "entry": "initial",
   "script": {
-    "ref": "create_dialogue_v2.py",
+    "ref": "create_dialogue_v3.py",
     "language": "python",
     "transport": "newline-delimited JSON over stdin/stdout",
     "stderr": "diagnostics only",
@@ -24,7 +24,8 @@
     "type": "object",
     "required": [
       "execution_script",
-      "return_schema"
+      "return_schema",
+      "kb_items"
     ],
     "properties": {
       "execution_script": {
@@ -35,6 +36,15 @@
       "return_schema": {
         "type": "object",
         "description": "JSON Schema for the model-facing result of the execution transaction."
+      },
+      "kb_items": {
+        "type": "array",
+        "uniqueItems": true,
+        "items": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": "Canonical execution-KB record IDs associated with this contract. The list is the deduplicated union of KB records actually used to draft the contract and additional records associated after inspecting actions in the drafted script. Empty when no KB association is warranted."
       }
     },
     "additionalProperties": false
@@ -58,7 +68,10 @@
       "GOAL_TO_QUERY",
       "TOPIC_SELECTION",
       "SYNTHESIZE_SOLVER_INSTRUCTION",
-      "APPLY_SOLVER_INSTRUCTION"
+      "DRAFT_EXECUTION_CONTRACT",
+      "POST_DRAFT_KB_QUERY",
+      "POST_DRAFT_KB_SELECTION",
+      "FINALIZE_CONTRACT"
     ],
     "semantics": [
       "Ask the model for the exact current user prompt.",
@@ -68,11 +81,14 @@
       "Resolve the model-selected topic IDs to their full canonical KB records.",
       "Give the goal and full selected KB records to the model as the problem of constructing the instruction that should solve that goal under that KB context.",
       "Require the model to return that solver instruction without solving the goal in the synthesis step.",
-      "Then give the synthesized solver instruction back to the model together with the same goal and selected KB records and instruct it to execute that instruction semantically.",
-      "The application step returns a terminal outcome envelope containing result and transition.",
-      "The result is the executable contract and is validated only by this transaction's return_schema.",
+      "Execute the synthesized instruction semantically to draft execution_script and return_schema, and require the model to identify only the supplied KB record IDs that materially informed the draft.",
+      "After the contract draft exists, inspect its concrete script actions and ask for additional execution-KB queries for topics that should be associated with the contract because of those actions.",
+      "Run those post-draft queries deterministically, expose selectable topic projections, and allow the model to select zero or more additional KB records.",
+      "Finalize contract.kb_items mechanically as the deduplicated union of records used to draft the contract and additional action-associated records.",
+      "Require the final model response to return the machine-finalized contract unchanged as result and choose the next transition.",
+      "The result is validated only by this transaction's return_schema.",
       "The transition is consumed by the higher-level mode controller and is not part of the model-facing result.",
-      "The transaction receipt is generated separately by the transaction runtime and is not part of the model-facing result."
+      "The transaction receipt separately preserves which kb_items were used_to_draft versus associated_for_execution."
     ]
   }
 }
