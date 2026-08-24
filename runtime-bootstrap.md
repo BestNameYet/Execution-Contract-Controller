@@ -47,6 +47,9 @@ The authoritative runtime publication identity is the JSON object written into t
 }
 ```
 
+- Artifact URL: `https://github.com/BestNameYet/Execution-Contract-Controller/actions/runs/32786887021/artifacts/9541767524`
+- Artifact ID: `9541767524`
+
 The JSON above is the Git publication pointer. The archive contains the identical JSON as `runtime-publication.json`. The artifact URL and artifact ID are bootstrap-only transport fields and are added after upload; until then no artifact location is published.
 <!-- RUNTIME_PUBLICATION_END -->
 
