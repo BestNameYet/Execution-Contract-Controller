@@ -1,30 +1,34 @@
 #!/usr/bin/env python3
 """Generic V0 transaction runtime.
 
-A transaction definition supplies:
-- script: referenced Python file or inline Python source
-- return_schema: schema for the semantic result exposed to the model
-- completion rule: where the semantic result comes from
-- allowed_transitions: optional control-plane transitions
-
 The runtime maintains three independent planes:
 
 DATA PLANE
-    outcome.result -- validated by return_schema; this is the only model-facing
-    transaction result.
+    outcome.result -- validated by the active transaction return schema; this is
+    the only terminal transaction result exposed to the model.
 
 CONTROL PLANE
     outcome.transition -- consumed by the higher-level mode controller and not
-    included in the model-facing result.
+    included in the terminal result.
 
 RECORD PLANE
     outcome.receipt -- complete Level-1 transaction record. If
     TRANSACTION_RECEIPT_FD is supplied, the receipt is also written there as
     one JSON line. It is never written to the model-visible stdout channel.
 
-CREATE is represented as a dialogue transaction. A model-authored execution
-contract can be converted into an execution transaction with
-execution_definition(contract), then run by the same transaction() function.
+Dialogue transactions reference a dialogue script and declare their fixed
+return_schema. Execution transactions carry the model-authored contract intact:
+
+    {
+      "execution_script": "<python source>",
+      "return_schema": { ... },
+      "kb_items": ["canonical.kb.id", ...]
+    }
+
+For execution, that embedded contract is authoritative. Immediately before the
+script starts, any associated kb_items are resolved to their full canonical KB
+records and broadcast once to the model-visible channel. This broadcast is
+context injection only: it does not request or consume a model response.
 """
 
 from __future__ import annotations
@@ -41,6 +45,7 @@ from typing import Any, TextIO
 RECEIPT_FD_ENV = "TRANSACTION_RECEIPT_FD"
 META_FD_ENV = "TRANSACTION_META_FD"
 HERE = Path(__file__).resolve().parent
+DEFAULT_EXECUTION_KB = HERE / "execution_knowledge_base.json"
 
 
 class TransactionError(RuntimeError):
@@ -138,6 +143,8 @@ def validate(value: Any, schema: dict[str, Any], path: str = "$") -> None:
                 raise ResultValidationError(f"{path}: array items must be unique")
         item_schema = schema.get("items")
         if item_schema is not None:
+            if not isinstance(item_schema, dict):
+                raise ResultValidationError(f"{path}: items must be a schema object")
             for index, item in enumerate(value):
                 validate(item, item_schema, f"{path}[{index}]")
 
@@ -171,27 +178,59 @@ def _load_definition(value: dict[str, Any] | str | Path) -> tuple[dict[str, Any]
     raise DefinitionError("transaction definition must be a dict, JSON string, or path")
 
 
+def _validate_execution_contract(contract: Any) -> dict[str, Any]:
+    if not isinstance(contract, dict):
+        raise DefinitionError("execution definition requires contract object")
+    if set(contract.keys()) != {"execution_script", "return_schema", "kb_items"}:
+        raise DefinitionError(
+            "execution contract must contain exactly execution_script, return_schema, and kb_items"
+        )
+    script = contract.get("execution_script")
+    schema = contract.get("return_schema")
+    kb_items = contract.get("kb_items")
+    if not isinstance(script, str) or not script.strip():
+        raise DefinitionError("execution contract requires non-empty execution_script")
+    if not isinstance(schema, dict):
+        raise DefinitionError("execution contract requires return_schema object")
+    if not isinstance(kb_items, list) or not all(isinstance(item, str) and item for item in kb_items):
+        raise DefinitionError("execution contract kb_items must be an array of non-empty canonical IDs")
+    if len(set(kb_items)) != len(kb_items):
+        raise DefinitionError("execution contract kb_items must be unique")
+    return contract
+
+
 def _validate_definition(definition: dict[str, Any]) -> None:
     if definition.get("schema") != "transaction-definition-v1":
         raise DefinitionError("schema must be transaction-definition-v1")
-    if definition.get("kind") not in {"dialogue", "execution"}:
+    kind = definition.get("kind")
+    if kind not in {"dialogue", "execution"}:
         raise DefinitionError("kind must be dialogue or execution")
-    if not isinstance(definition.get("script"), dict):
-        raise DefinitionError("script must be an object")
-    script = definition["script"]
-    has_ref = isinstance(script.get("ref"), str) and bool(script["ref"].strip())
-    has_source = isinstance(script.get("source"), str) and bool(script["source"].strip())
-    if has_ref == has_source:
-        raise DefinitionError("script must contain exactly one of ref or source")
-    if not isinstance(definition.get("return_schema"), dict):
-        raise DefinitionError("return_schema must be a JSON Schema object")
+
+    if kind == "dialogue":
+        if not isinstance(definition.get("script"), dict):
+            raise DefinitionError("dialogue script must be an object")
+        script = definition["script"]
+        has_ref = isinstance(script.get("ref"), str) and bool(script["ref"].strip())
+        has_source = isinstance(script.get("source"), str) and bool(script["source"].strip())
+        if has_ref == has_source:
+            raise DefinitionError("dialogue script must contain exactly one of ref or source")
+        if not isinstance(definition.get("return_schema"), dict):
+            raise DefinitionError("dialogue return_schema must be a JSON Schema object")
+        return
+
+    _validate_execution_contract(definition.get("contract"))
 
 
-def _command(definition: dict[str, Any], base_dir: Path, python_executable: str) -> list[str]:
+def _dialogue_command(definition: dict[str, Any], base_dir: Path, python_executable: str) -> list[str]:
     script = definition["script"]
     if "ref" in script:
         return [python_executable, str((base_dir / script["ref"]).resolve())]
     return [python_executable, "-c", script["source"]]
+
+
+def _execution_command(definition: dict[str, Any], python_executable: str) -> list[str]:
+    contract = _validate_execution_contract(definition.get("contract"))
+    return [python_executable, "-c", contract["execution_script"]]
 
 
 def _emit_receipt(receipt: dict[str, Any]) -> None:
@@ -228,6 +267,62 @@ def _drain_metadata(fd: int, sink: list[Any]) -> None:
         return
 
 
+def _resolve_execution_kb(definition: dict[str, Any], base_dir: Path) -> tuple[list[str], list[dict[str, Any]]]:
+    contract = _validate_execution_contract(definition.get("contract"))
+    ids = contract["kb_items"]
+    if not ids:
+        return [], []
+
+    resources = definition.get("resources") if isinstance(definition.get("resources"), dict) else {}
+    kb_ref = resources.get("execution_kb", "execution_knowledge_base.json")
+    if not isinstance(kb_ref, str) or not kb_ref:
+        raise DefinitionError("execution resources.execution_kb must be a file reference")
+    kb_path = (base_dir / kb_ref).resolve()
+    if not kb_path.exists() and kb_ref == "execution_knowledge_base.json":
+        kb_path = DEFAULT_EXECUTION_KB
+
+    try:
+        kb = json.loads(kb_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise TransactionError(f"execution KB file not found: {kb_path}") from exc
+    except json.JSONDecodeError as exc:
+        raise TransactionError(f"execution KB is invalid JSON: {exc.msg}") from exc
+
+    records = kb.get("records") if isinstance(kb, dict) else None
+    if not isinstance(records, list):
+        raise TransactionError("execution KB must contain a records array")
+    by_id = {
+        record["id"]: record
+        for record in records
+        if isinstance(record, dict) and isinstance(record.get("id"), str)
+    }
+    missing = [item for item in ids if item not in by_id]
+    if missing:
+        raise TransactionError("contract references missing KB items: " + ", ".join(missing))
+    return ids, [by_id[item] for item in ids]
+
+
+def _broadcast_execution_context(
+    definition: dict[str, Any],
+    base_dir: Path,
+    *,
+    model_stdout: TextIO,
+) -> dict[str, Any] | None:
+    ids, records = _resolve_execution_kb(definition, base_dir)
+    if not ids:
+        return None
+    broadcast = {
+        "stage": "EXECUTION_CONTEXT",
+        "message": "Associated KB context for the execution transaction. The script begins immediately after this broadcast; no response is requested.",
+        "kb_items": ids,
+        "kb_context": records,
+        "requires_response": False,
+    }
+    model_stdout.write(compact(broadcast) + "\n")
+    model_stdout.flush()
+    return broadcast
+
+
 def _run_dialogue(
     definition: dict[str, Any],
     base_dir: Path,
@@ -236,7 +331,7 @@ def _run_dialogue(
     model_stdout: TextIO,
     python_executable: str,
 ) -> TransactionOutcome:
-    command = _command(definition, base_dir, python_executable)
+    command = _dialogue_command(definition, base_dir, python_executable)
 
     meta_read, meta_write = os.pipe()
     env = dict(os.environ)
@@ -340,10 +435,18 @@ def _run_execution(
     definition: dict[str, Any],
     base_dir: Path,
     *,
+    model_stdout: TextIO,
     python_executable: str,
     timeout: float | None,
 ) -> TransactionOutcome:
-    command = _command(definition, base_dir, python_executable)
+    contract = _validate_execution_contract(definition.get("contract"))
+    context_broadcast = _broadcast_execution_context(
+        definition,
+        base_dir,
+        model_stdout=model_stdout,
+    )
+    command = _execution_command(definition, python_executable)
+
     try:
         completed = subprocess.run(
             command,
@@ -373,11 +476,13 @@ def _run_execution(
             f"parse failed at line {exc.lineno} column {exc.colno}: {exc.msg}"
         ) from exc
 
-    validate(result, definition["return_schema"])
+    validate(result, contract["return_schema"])
     receipt = {
         "transaction_id": definition.get("id"),
         "kind": "execution",
         "definition": definition,
+        "contract": contract,
+        "pre_execution_context_broadcast": context_broadcast,
         "stdout": completed.stdout,
         "stderr": completed.stderr,
         "exit_code": completed.returncode,
@@ -411,34 +516,34 @@ def transaction(
     return _run_execution(
         definition,
         base_dir,
+        model_stdout=model_stdout,
         python_executable=python_executable,
         timeout=timeout,
     )
 
 
 def execution_definition(contract: dict[str, Any]) -> dict[str, Any]:
-    """Convert a CREATE result into the next executable transaction definition."""
-    if not isinstance(contract, dict):
-        raise DefinitionError("execution contract must be an object")
-    script = contract.get("execution_script")
-    return_schema = contract.get("return_schema")
-    if not isinstance(script, str) or not script.strip():
-        raise DefinitionError("execution contract requires non-empty execution_script")
-    if not isinstance(return_schema, dict):
-        raise DefinitionError("execution contract requires return_schema object")
+    """Convert a CREATE result into an execution transaction definition.
+
+    The original model-authored contract is retained intact and remains the
+    authority for the execution script, its model-facing return schema, and all
+    KB items associated with execution.
+    """
+    contract = _validate_execution_contract(contract)
     return {
         "schema": "transaction-definition-v1",
         "id": "execute",
         "title": "Execute model-authored contract",
         "kind": "execution",
-        "script": {
-            "source": script,
-            "language": "python",
-            "stdout": "exactly one JSON value matching return_schema",
-            "stderr": "diagnostics only",
+        "contract": contract,
+        "resources": {
+            "execution_kb": "execution_knowledge_base.json"
         },
-        "return_schema": return_schema,
-        "completion": {"source": "child_stdout_json"},
+        "completion": {"source": "contract_execution_script_stdout_json"},
+        "pre_execution": {
+            "broadcast_contract_kb_items": True,
+            "requires_model_response": False,
+        },
         "allowed_transitions": [],
     }
 
@@ -449,13 +554,7 @@ def initial_transaction() -> Path:
 
 
 if __name__ == "__main__":
-    definition_arg = Path(sys.argv[1]) if len(sys.argv) > 1 else initial_transaction()
-    try:
-        outcome = transaction(definition_arg)
-    except TransactionError as exc:
-        sys.stderr.write(str(exc) + "\n")
-        raise SystemExit(2)
-
-    # CLI model-facing return: result only. Transition and receipt remain internal.
+    definition_arg = sys.argv[1] if len(sys.argv) > 1 else str(initial_transaction())
+    outcome = transaction(definition_arg)
     sys.stdout.write(compact(outcome.result) + "\n")
     sys.stdout.flush()
