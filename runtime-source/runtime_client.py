@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Publication trigger only; no runtime behavior change.
 import json
 import socket
 import sys
