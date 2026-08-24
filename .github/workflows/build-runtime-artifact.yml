@@ -1,10 +1,33 @@
 name: Build Runtime Artifact
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
+  check-sentinel:
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.sentinel.outputs.enabled }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Read runtime sentinel
+        id: sentinel
+        shell: bash
+        run: |
+          value="$(tr -d '[:space:]' < runtime-control/runtime_gate.txt | tr '[:upper:]' '[:lower:]')"
+          if [ "$value" = "true" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build-runtime-artifact:
+    needs: check-sentinel
+    if: needs.check-sentinel.outputs.enabled == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
