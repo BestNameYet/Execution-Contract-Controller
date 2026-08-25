@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -87,10 +86,8 @@ class InitialPipelineTests(unittest.TestCase):
         )
         self.assertEqual(requests[1]["payload"], {"questions": ["Old question?"]})
         self.assertEqual(requests[3]["payload"], {"questions": ["New question?"]})
-        self.assertNotEqual(
-            requests[0]["payload"]["sha256"],
-            requests[2]["payload"]["sha256"],
-        )
+        self.assertEqual(requests[0]["payload"]["user_prompt"], "Solve this")
+        self.assertEqual(requests[2]["payload"]["user_prompt"], "Solve this")
 
     def test_snapshot_tampering_is_rejected(self):
         state = capture_1({"user_prompt": "x", "attempt": 1})
