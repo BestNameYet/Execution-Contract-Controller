@@ -187,6 +187,7 @@ def _validate_script(script: Any) -> str:
 def _run_child(script: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, "-c", script],
+        stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
         check=False,
