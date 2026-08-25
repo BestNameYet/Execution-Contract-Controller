@@ -1,50 +1,77 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from typing import Any
 
 
-SCRIPT_FIELDS = ("script", "solution", "event", "result")
+class ChildExecutionError(RuntimeError):
+    """Raised when the child execution environment fails."""
 
 
-def do_transaction(item: dict[str, Any]) -> Any:
-    """Execute a Python script literal carried by one incoming JSON object.
+class ChildOutcomeValidationError(ValueError):
+    """Raised when the child does not return a valid JSON outcome object."""
 
-    The first string value found under script, solution, event, or result is
-    executed as Python. The script receives the original object as
-    ``transaction`` and must assign its JSON-compatible return object to
-    ``output``.
-    """
 
-    if not isinstance(item, dict):
-        raise TypeError("do_transaction expects one JSON object")
+def _validate_script(script: Any) -> str:
+    if not isinstance(script, str):
+        raise TypeError("script must be a string")
+    if not script.strip():
+        raise ValueError("script must be a non-empty string")
+    return script
 
-    script: str | None = None
-    source_field: str | None = None
 
-    for field in SCRIPT_FIELDS:
-        value = item.get(field)
-        if isinstance(value, str):
-            script = value
-            source_field = field
-            break
+def _run_child(script: str) -> dict[str, Any]:
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
 
-    if script is None or source_field is None:
-        raise ValueError(
-            "no Python script literal found in any of: "
-            + ", ".join(SCRIPT_FIELDS)
+    if completed.returncode != 0:
+        raise ChildExecutionError(
+            f"child exited with code {completed.returncode}: {completed.stderr.rstrip()}"
         )
 
-    scope: dict[str, Any] = {
-        "transaction": item,
-        "output": None,
-    }
-    exec(compile(script, f"<transaction:{source_field}>", "exec"), scope, scope)
-
-    output = scope["output"]
     try:
-        json.dumps(output, ensure_ascii=False, allow_nan=False)
-    except (TypeError, ValueError) as exc:
-        raise TypeError("transaction script output must be JSON-compatible") from exc
+        outcome = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise ChildOutcomeValidationError(
+            "child stdout must be exactly one JSON object"
+        ) from exc
 
-    return output
+    if not isinstance(outcome, dict):
+        raise ChildOutcomeValidationError("child outcome must be a JSON object")
+
+    return outcome
+
+
+def do_transaction(script: str | None = None) -> dict[str, Any] | None:
+    """Execute one transaction and recursively execute the script it generates.
+
+    ``do_transaction()`` with no script halts the machine.
+
+    A non-empty script is executed in a child Python process. The child must
+    return a JSON object to the parent on stdout. If that outcome contains a
+    ``script`` field, the parent validates it and starts the next transaction
+    by calling ``do_transaction(next_script)``. If the outcome contains no
+    ``script`` field, the parent calls ``do_transaction()`` to halt and returns
+    the terminal child outcome.
+
+    Other child-outcome fields are not interpreted or restricted here.
+    """
+
+    if script is None:
+        return None
+
+    current_script = _validate_script(script)
+    outcome = _run_child(current_script)
+
+    if "script" not in outcome:
+        do_transaction()
+        return outcome
+
+    next_script = _validate_script(outcome["script"])
+    return do_transaction(next_script)
