@@ -300,62 +300,130 @@ def _run_stage_subprocess(stage_name: str, input_state: Mapping[str, Any]) -> di
     return parsed
 
 
-def run_initial(
+def _request_envelope(stage_state: Mapping[str, Any], receipt_dir: str | os.PathLike[str]) -> dict[str, Any]:
+    state = _require_object(dict(stage_state), "stage state")
+    if not isinstance(state.get("model_request"), dict):
+        raise StageValidationError("stage state must contain model_request")
+    return {
+        "type": "MODEL_REQUEST",
+        "receipt_dir": str(Path(receipt_dir).expanduser().resolve()),
+        "state": state,
+    }
+
+
+def start_initial(
     user_prompt: str,
-    model_call: Callable[[dict[str, Any]], Mapping[str, Any]],
     *,
     receipt_dir: str | os.PathLike[str] = "./transaction-receipts",
-) -> dict[str, Any] | None:
-    """Run the initial staged machine, then execute the returned solution script."""
+) -> dict[str, Any]:
+    """Start the machine and return the first model request. No model handle is required."""
     if not isinstance(user_prompt, str):
         raise TypeError("user_prompt must be a string")
 
-    attempt = 1
-    while True:
-        state = _run_stage_subprocess(
+    state = _run_stage_subprocess(
+        "capture_1",
+        {"user_prompt": user_prompt, "attempt": 1},
+    )
+    return _request_envelope(state, receipt_dir)
+
+
+def resume_initial(
+    machine_state: Mapping[str, Any],
+    model_response: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Advance one model-response boundary and return the next request or COMPLETE."""
+    envelope = _require_object(dict(machine_state), "machine state")
+    _require_exact_keys(envelope, {"type", "receipt_dir", "state"}, "machine state")
+    if envelope["type"] != "MODEL_REQUEST":
+        raise StageValidationError("machine state type must be MODEL_REQUEST")
+    receipt_dir = envelope["receipt_dir"]
+    if not isinstance(receipt_dir, str) or not receipt_dir:
+        raise StageValidationError("receipt_dir must be a non-empty string")
+
+    stage_state = _require_object(envelope["state"], "machine stage state")
+    next_stage = stage_state.get("next_stage")
+    if next_stage not in {"capture_2", "capture_3", "capture_4"}:
+        raise StageValidationError("machine stage state has no valid next_stage")
+    if not isinstance(model_response, Mapping):
+        raise StageValidationError("model_response must be a JSON object")
+
+    stage_input = dict(stage_state)
+    stage_input["model_response"] = dict(model_response)
+    output = _run_stage_subprocess(next_stage, stage_input)
+
+    if output.get("restart_at") == "capture_1":
+        restart_state = _run_stage_subprocess(
             "capture_1",
-            {"user_prompt": user_prompt, "attempt": attempt},
+            {
+                "user_prompt": output["user_prompt"],
+                "attempt": output["attempt"],
+            },
         )
+        return _request_envelope(restart_state, receipt_dir)
 
-        state = dict(state)
-        state["model_response"] = dict(model_call(dict(state["model_request"])))
-        state = _run_stage_subprocess("capture_2", state)
+    if "script" in output:
+        from minimal_controller import do_transaction
 
-        state = dict(state)
-        state["model_response"] = dict(model_call(dict(state["model_request"])))
-        state = _run_stage_subprocess("capture_3", state)
+        result = do_transaction(output["script"], receipt_dir=receipt_dir)
+        return {
+            "type": "COMPLETE",
+            "receipt_dir": receipt_dir,
+            "final_state": output,
+            "result": result,
+        }
 
-        if state.get("restart_at") == "capture_1":
-            attempt = state["attempt"]
-            continue
+    return _request_envelope(output, receipt_dir)
 
-        state = dict(state)
-        state["model_response"] = dict(model_call(dict(state["model_request"])))
-        state = _run_stage_subprocess("capture_4", state)
-        solution_script = state["script"]
-        break
 
-    from minimal_controller import do_transaction
-
-    return do_transaction(solution_script, receipt_dir=receipt_dir)
+def _write_stdout_json(value: Mapping[str, Any]) -> None:
+    sys.stdout.write(json.dumps(dict(value), ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+    sys.stdout.write("\n")
 
 
 def _cli() -> int:
-    if len(sys.argv) != 5 or sys.argv[1] != "--stage" or sys.argv[3] != "--state-file":
+    try:
+        if len(sys.argv) == 5 and sys.argv[1] == "--stage" and sys.argv[3] == "--state-file":
+            stage_name = sys.argv[2]
+            state_path = Path(sys.argv[4])
+            input_state = json.loads(state_path.read_text(encoding="utf-8"))
+            _write_stdout_json(run_stage(stage_name, input_state))
+            return 0
+
+        if len(sys.argv) == 3 and sys.argv[1] == "--start-file":
+            start_path = Path(sys.argv[2])
+            start_input = json.loads(start_path.read_text(encoding="utf-8"))
+            start_obj = _require_object(start_input, "start input")
+            allowed = {"user_prompt", "receipt_dir"}
+            extra = set(start_obj) - allowed
+            if "user_prompt" not in start_obj or extra:
+                raise StageValidationError(
+                    f"start input must contain user_prompt and optional receipt_dir; extra={sorted(extra)}"
+                )
+            output = start_initial(
+                start_obj["user_prompt"],
+                receipt_dir=start_obj.get("receipt_dir", "./transaction-receipts"),
+            )
+            _write_stdout_json(output)
+            return 0
+
+        if (
+            len(sys.argv) == 5
+            and sys.argv[1] == "--resume-file"
+            and sys.argv[3] == "--response-file"
+        ):
+            machine_state = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+            model_response = json.loads(Path(sys.argv[4]).read_text(encoding="utf-8"))
+            _write_stdout_json(resume_initial(machine_state, model_response))
+            return 0
+
         print(
-            "usage: initial.py --stage <capture_1|capture_2|capture_3|capture_4> --state-file <path>",
+            "usage:\n"
+            "  initial.py --start-file <json-path>\n"
+            "  initial.py --resume-file <machine-state-json> --response-file <model-response-json>\n"
+            "  initial.py --stage <capture_1|capture_2|capture_3|capture_4> --state-file <path>",
             file=sys.stderr,
         )
         return 2
-
-    stage_name = sys.argv[2]
-    state_path = Path(sys.argv[4])
-    try:
-        input_state = json.loads(state_path.read_text(encoding="utf-8"))
-        output = run_stage(stage_name, input_state)
-        sys.stdout.write(json.dumps(output, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
-        sys.stdout.write("\n")
-        return 0
     except Exception as exc:
         print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
