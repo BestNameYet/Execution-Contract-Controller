@@ -38,12 +38,15 @@ def receive_valid(
         if error is None and value is not None:
             return value
 
-        emit(
-            {
-                "error": error,
-                "repeat": previous_message,
-            }
-        )
+        emit({"error": error, "repeat": previous_message})
+
+
+def validate_user_prompt(value: dict[str, Any]) -> str | None:
+    if set(value.keys()) != {"user_prompt"}:
+        return "stdin response keys must be exactly ['user_prompt']"
+    if not isinstance(value["user_prompt"], str):
+        return "user_prompt must be a string"
+    return None
 
 
 def validate_q1(value: dict[str, Any]) -> str | None:
@@ -72,14 +75,21 @@ def validate_script(value: dict[str, Any]) -> str | None:
 
 
 def main() -> None:
+    user_prompt_request = {
+        "instruction": "Return the current user prompt exactly. Return only the required return schema.",
+        "return_schema": {"user_prompt": "<current user prompt>"},
+    }
+    emit(user_prompt_request)
+    user_prompt_response = receive_valid(user_prompt_request, validate_user_prompt)
+    user_prompt = user_prompt_response["user_prompt"]
+
     question_request = {
         "instruction": (
-            "Create a list of questions q1 in the domain of the current problem. "
+            "Create a list of questions q1 needed to solve the supplied user prompt. "
             "Return only the required return schema."
         ),
-        "return_schema": {
-            "q1": ["<question>"]
-        },
+        "user_prompt": user_prompt,
+        "return_schema": {"q1": ["<question>"]},
     }
     emit(question_request)
 
@@ -90,13 +100,12 @@ def main() -> None:
     for question in q1:
         answer_request = {
             "instruction": (
-                "Answer the supplied question in the domain of the current problem. "
+                "Answer the supplied question as needed to solve the supplied user prompt. "
                 "Return only the required return schema."
             ),
+            "user_prompt": user_prompt,
             "question": question,
-            "return_schema": {
-                "answer": "<answer>"
-            },
+            "return_schema": {"answer": "<answer>"},
         }
         emit(answer_request)
 
@@ -105,13 +114,12 @@ def main() -> None:
 
     script_request = {
         "instruction": (
-            "Return a script that solves the current problem. Use qa1 as a context parameter. "
+            "Return a script that solves the supplied user prompt. Use qa1 as a context parameter. "
             "Return only the required return schema."
         ),
+        "user_prompt": user_prompt,
         "qa1": qa1,
-        "return_schema": {
-            "script": "<script>"
-        },
+        "return_schema": {"script": "<script>"},
     }
     emit(script_request)
 
