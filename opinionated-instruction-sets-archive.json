@@ -5,5 +5,6 @@
   "archive_filename": null,
   "source_commit": null,
   "source_directory": "standalone-transaction-machine/minimal-controller-design/opinionated instruction sets",
-  "workflow_run_id": null
+  "workflow_run_id": null,
+  "sentinel": true
 }
