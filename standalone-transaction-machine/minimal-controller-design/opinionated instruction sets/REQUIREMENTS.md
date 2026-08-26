@@ -1,6 +1,6 @@
 # Minimal Opinionated Instruction Set Requirements
 
-This document defines the requirements for the opinionated instruction-set caller that uses `initial.py` for interrogation and the simplified transaction layer for execution.
+This document defines requirements only for this particular minimal opinionated instruction set, which uses `initial.py` for interrogation and the simplified transaction layer for execution. These requirements do not automatically apply to other opinionated instruction sets.
 
 | ID | Requirement | Status | Code location / evidence |
 |---|---|---|---|
@@ -26,7 +26,7 @@ This document defines the requirements for the opinionated instruction-set calle
 | OIS-020 | After a valid final script response is received, `initial.py` must emit one non-instructional conversational closing message through the normal stdout emission path. | MET | `initial.py`: after `receive_valid(script_request, validate_script)`, it calls `emit({"message": "Thanks, that completes the interrogation."})`. |
 | OIS-021 | `initial.py` must perform no further stdin reads or semantic requests after the closing message and must then terminate naturally by reaching the end of the script. | MET | `initial.py`: the closing `emit(...)` is the final statement in `main()`; control returns naturally and the module ends after `main()` completes. |
 | OIS-022 | The caller must rely on completion of `do_transaction(...)` as the boundary indicating that the child script has ended and the transaction receipt has been finalized at the supplied receipt path. | MET | `minimal instruction set.py`: each synchronous `do_transaction(...)` call completes before the caller proceeds; after the first return the caller immediately reads the supplied receipt path, and after the second return it returns both known receipt paths. |
-| OIS-023 | Every model-generated question used during the interrogation must be transmitted back to the model verbatim, without rewriting, paraphrasing, prefixing, suffixing, or otherwise changing the question text. | MET | `initial.py`: inside `for question in q1`, the outbound packet is built with `"instruction": question`; the model-generated string is assigned directly to the instruction field without transformation. |
+| OIS-023 | In this minimal opinionated instruction set, every model-generated question used during its interrogation must be transmitted back to the model verbatim, without rewriting, paraphrasing, prefixing, suffixing, or otherwise changing the question text. This requirement is specific to this set and does not constrain other opinionated instruction sets. | MET | `initial.py`: inside `for question in q1`, the outbound packet is built with `"instruction": question`; the model-generated string is assigned directly to the instruction field without transformation. |
 
 ## Intended sequence
 
