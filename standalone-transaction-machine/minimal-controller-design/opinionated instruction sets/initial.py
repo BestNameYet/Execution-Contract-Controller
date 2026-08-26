@@ -21,8 +21,6 @@ def receive() -> dict[str, Any]:
 
 
 def main() -> None:
-    # 1. Ask the model to create q1 for the current problem already present
-    # in the model's higher-scope context.
     emit(
         {
             "instruction": (
@@ -40,8 +38,6 @@ def main() -> None:
     if not isinstance(q1, list) or not all(isinstance(q, str) for q in q1):
         raise TypeError("q1 must be a JSON array of strings")
 
-    # 2. Ask each q1 question individually and mechanically build qa1 from
-    # the original question text plus each returned answer.
     qa1: list[dict[str, str]] = []
     for question in q1:
         emit(
@@ -63,8 +59,6 @@ def main() -> None:
             raise TypeError("answer must be a string")
         qa1.append({"question": question, "answer": answer})
 
-    # 3. The interrogation terminates by emitting the script-generation
-    # instruction with qa1 as context for the next semantic evaluation.
     emit(
         {
             "instruction": (
@@ -77,6 +71,11 @@ def main() -> None:
             },
         }
     )
+
+    script_response = receive()
+    script = script_response["script"]
+    if not isinstance(script, str):
+        raise TypeError("script must be a string")
 
 
 if __name__ == "__main__":
