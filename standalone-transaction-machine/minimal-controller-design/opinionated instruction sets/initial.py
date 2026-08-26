@@ -71,7 +71,7 @@ def validate_script(value: dict[str, Any]) -> str | None:
     return None
 
 
-def main() -> int:
+def main() -> None:
     question_request = {
         "instruction": (
             "Create a list of questions q1 in the domain of the current problem. "
@@ -118,8 +118,7 @@ def main() -> int:
     receive_valid(script_request, validate_script)
 
     emit({"message": "Thanks, that completes the interrogation."})
-    return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()
