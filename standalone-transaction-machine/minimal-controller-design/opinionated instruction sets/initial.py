@@ -117,6 +117,8 @@ def main() -> None:
 
     receive_valid(script_request, validate_script)
 
+    emit({"message": "Thanks, that completes the interrogation."})
+
 
 if __name__ == "__main__":
     main()
