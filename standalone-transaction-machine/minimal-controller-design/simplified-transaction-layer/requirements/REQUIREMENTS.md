@@ -22,14 +22,13 @@ This table contains only requirements explicitly established in the project conv
 | STL-014 | Recorded stdin/stdout/stderr events preserve their transaction order and remain in local memory while the child is running. | SPECIFIED | Implementation evidence not yet verified against this revised table. |
 | STL-015 | The transaction records the exact script supplied for execution. | SPECIFIED | Implementation evidence not yet verified against this revised table. |
 | STL-016 | A normal transaction is finite: the transaction remains active while the supplied script is running and receipt finalization occurs after the script terminates and the child process closes. | SPECIFIED | Implementation evidence not yet verified against this revised table. |
-| STL-017 | Work belonging to a persistent system is divided into finite transaction units when completed receipts are required. | SPECIFIED | Implementation evidence not yet verified against this revised table. |
-| STL-018 | A transaction invocation with no script executes no child script and still generates a transaction receipt. | SPECIFIED | Implementation evidence not yet verified against this revised table. |
-| STL-019 | During child execution, transaction events are accumulated in memory; the receipt file is written only after the child process has closed. | SPECIFIED | Implementation evidence not yet verified against this revised table. |
-| STL-020 | The completed transaction receipt is written once to a local receipt file, either at a caller-specified filename or at a transaction-specific generated filename. | SPECIFIED | Implementation evidence not yet verified against this revised table. |
-| STL-021 | After writing the receipt, the transaction verifies that the receipt file exists at the selected local destination. | SPECIFIED | Implementation evidence not yet verified against this revised table. |
-| STL-022 | After writing the receipt, the transaction reads the persisted receipt back and verifies that it matches the in-memory receipt object that was used to write it. | SPECIFIED | Implementation evidence not yet verified against this revised table. |
-| STL-023 | Receipt persistence is complete only after the written receipt has been verified against the in-memory receipt used for persistence. | SPECIFIED | Implementation evidence not yet verified against this revised table. |
+| STL-017 | A transaction invocation with no script executes no child script and still generates a transaction receipt. | SPECIFIED | Implementation evidence not yet verified against this revised table. |
+| STL-018 | During child execution, transaction events are accumulated in memory; the receipt file is written only after the child process has closed. | SPECIFIED | Implementation evidence not yet verified against this revised table. |
+| STL-019 | The completed transaction receipt is written once to a local receipt file, either at a caller-specified filename or at a transaction-specific generated filename. | SPECIFIED | Implementation evidence not yet verified against this revised table. |
+| STL-020 | After writing the receipt, the transaction verifies that the receipt file exists at the selected local destination. | SPECIFIED | Implementation evidence not yet verified against this revised table. |
+| STL-021 | After writing the receipt, the transaction reads the persisted receipt back and verifies that it matches the in-memory receipt object that was used to write it. | SPECIFIED | Implementation evidence not yet verified against this revised table. |
+| STL-022 | Receipt persistence is complete only after the written receipt has been verified against the in-memory receipt used for persistence. | SPECIFIED | Implementation evidence not yet verified against this revised table. |
 
 ## Current verification state
 
-This revision makes the caller mapping explicit: for stdin/stdout/stderr, the transaction caller is mapped to the supplied script's caller-facing streams, and the transaction records the stream events that cross that boundary. Code compliance has not yet been re-evaluated against this revised table.
+This revision is limited to the transaction-layer abstraction. The prior persistent-system decomposition requirement has been removed because it belongs at a higher level. Code compliance can now be evaluated against these 22 transaction-layer requirements.
