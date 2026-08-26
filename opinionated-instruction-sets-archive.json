@@ -1,10 +1,10 @@
 {
-  "artifact_name": null,
-  "artifact_url": null,
-  "artifact_id": null,
-  "archive_filename": null,
-  "source_commit": null,
+  "archive_filename": "opinionated-instruction-sets-e999e8b5d9bc56609ae17c2da2ed42066f5b7d1e.zip",
+  "artifact_id": "9626853146",
+  "artifact_name": "opinionated-instruction-sets-e999e8b5d9bc56609ae17c2da2ed42066f5b7d1e",
+  "artifact_url": "https://github.com/BestNameYet/Execution-Contract-Controller/actions/runs/33021930736/artifacts/9626853146",
+  "sentinel": true,
+  "source_commit": "e999e8b5d9bc56609ae17c2da2ed42066f5b7d1e",
   "source_directory": "standalone-transaction-machine/minimal-controller-design/opinionated instruction sets",
-  "workflow_run_id": null,
-  "sentinel": true
+  "workflow_run_id": "33021930736"
 }
