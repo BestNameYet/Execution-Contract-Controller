@@ -83,7 +83,10 @@ def main() -> None:
     receive_valid(user_prompt_request, validate_user_prompt)
 
     question_request = {
-        "instruction": "Create a list of questions q1 for the interrogation. Return only the required return schema.",
+        "instruction": (
+            "Create a list of questions q1 that would assist a solver such as yourself in meeting "
+            "the objectives described in the user prompt. Return only the required return schema."
+        ),
         "return_schema": {"q1": ["<question>"]},
     }
     emit(question_request)
@@ -94,8 +97,7 @@ def main() -> None:
     qa1: list[dict[str, str]] = []
     for question in q1:
         answer_request = {
-            "instruction": "Answer the supplied question. Return only the required return schema.",
-            "question": question,
+            "instruction": question,
             "return_schema": {"answer": "<answer>"},
         }
         emit(answer_request)
