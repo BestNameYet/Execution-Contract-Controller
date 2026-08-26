@@ -20,7 +20,23 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Read archive sentinel
+        id: sentinel
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          pointer = json.loads(Path("opinionated-instruction-sets-archive.json").read_text(encoding="utf-8"))
+          enabled = pointer.get("sentinel") is True
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"enabled={'true' if enabled else 'false'}\n")
+          PY
+
       - name: Build directory archive
+        if: steps.sentinel.outputs.enabled == 'true'
         id: archive
         shell: bash
         run: |
@@ -52,6 +68,7 @@ jobs:
           ARCHIVE_FILENAME: opinionated-instruction-sets-${{ github.sha }}.zip
 
       - name: Upload archive
+        if: steps.sentinel.outputs.enabled == 'true'
         id: upload
         uses: actions/upload-artifact@v4
         with:
@@ -60,6 +77,7 @@ jobs:
           if-no-files-found: error
 
       - name: Update root archive pointer
+        if: steps.sentinel.outputs.enabled == 'true'
         shell: bash
         env:
           SOURCE_COMMIT: ${{ steps.archive.outputs.source_commit }}
@@ -73,6 +91,8 @@ jobs:
           import os
           from pathlib import Path
 
+          path = Path("opinionated-instruction-sets-archive.json")
+          existing = json.loads(path.read_text(encoding="utf-8"))
           pointer = {
               "artifact_name": os.environ["ARTIFACT_NAME"],
               "artifact_url": os.environ["ARTIFACT_URL"],
@@ -81,8 +101,9 @@ jobs:
               "source_commit": os.environ["SOURCE_COMMIT"],
               "source_directory": "standalone-transaction-machine/minimal-controller-design/opinionated instruction sets",
               "workflow_run_id": os.environ["GITHUB_RUN_ID"],
+              "sentinel": existing.get("sentinel") is True,
           }
-          Path("opinionated-instruction-sets-archive.json").write_text(
+          path.write_text(
               json.dumps(pointer, indent=2, sort_keys=True) + "\n",
               encoding="utf-8",
           )
