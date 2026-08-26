@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-import select
+import queue
 import subprocess
 import sys
 import threading
@@ -42,6 +42,114 @@ class EventRecorder:
             return [dict(event) for event in self._events]
 
 
+class TransactionStreamBridge:
+    """Per-transaction intermediate between caller streams and child pipes."""
+
+    def __init__(self, recorder: EventRecorder) -> None:
+        self._recorder = recorder
+        self._input: queue.Queue[str | None] = queue.Queue()
+        self._output_lock = threading.Lock()
+        self._stdout_sink: TextIO | None = None
+        self._stderr_sink: TextIO | None = None
+
+    def attach_outputs(self, stdout: TextIO, stderr: TextIO) -> None:
+        with self._output_lock:
+            self._stdout_sink = stdout
+            self._stderr_sink = stderr
+
+    def detach_outputs(self) -> None:
+        with self._output_lock:
+            self._stdout_sink = None
+            self._stderr_sink = None
+
+    def route_caller_input(self, data: str) -> None:
+        self._input.put(data)
+
+    def stop_input(self) -> None:
+        self._input.put(None)
+
+    def forward_input_to_child(self, child_stdin: TextIO) -> None:
+        """Forward only bridge input to child stdin; never read caller stdin directly."""
+        try:
+            while True:
+                data = self._input.get()
+                if data is None:
+                    return
+                self._recorder.record("stdin", "caller_to_script", data)
+                child_stdin.write(data)
+                child_stdin.flush()
+        except (BrokenPipeError, OSError, ValueError):
+            return
+
+    def forward_child_output(self, child_stream: TextIO, stream_name: str) -> None:
+        """Record child output and route it to the attached caller sink, if any."""
+        while True:
+            data = child_stream.readline()
+            if data == "":
+                return
+
+            self._recorder.record(stream_name, "script_to_caller", data)
+            with self._output_lock:
+                sink = self._stdout_sink if stream_name == "stdout" else self._stderr_sink
+                if sink is not None:
+                    sink.write(data)
+                    sink.flush()
+
+
+class CallerInputRouter:
+    """Own one real caller stdin and route it only to the currently attached bridge."""
+
+    def __init__(self, caller_stdin: TextIO) -> None:
+        self._caller_stdin = caller_stdin
+        self._lock = threading.Lock()
+        self._active_bridge: TransactionStreamBridge | None = None
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def attach(self, bridge: TransactionStreamBridge) -> None:
+        with self._lock:
+            if self._active_bridge is not None:
+                raise RuntimeError("caller stdin already has an active transaction bridge")
+            self._active_bridge = bridge
+
+    def detach(self, bridge: TransactionStreamBridge) -> None:
+        with self._lock:
+            if self._active_bridge is bridge:
+                self._active_bridge = None
+
+    def _run(self) -> None:
+        while True:
+            try:
+                data = self._caller_stdin.readline()
+            except (OSError, ValueError):
+                return
+
+            if data == "":
+                return
+
+            with self._lock:
+                bridge = self._active_bridge
+                if bridge is not None:
+                    bridge.route_caller_input(data)
+
+
+_ROUTER_LOCK = threading.Lock()
+_CALLER_INPUT_ROUTERS: dict[int, tuple[TextIO, CallerInputRouter]] = {}
+
+
+def _get_caller_input_router(caller_stdin: TextIO) -> CallerInputRouter:
+    """Return the sole router allowed to read this caller stdin object."""
+    key = id(caller_stdin)
+    with _ROUTER_LOCK:
+        existing = _CALLER_INPUT_ROUTERS.get(key)
+        if existing is not None and existing[0] is caller_stdin:
+            return existing[1]
+
+        router = CallerInputRouter(caller_stdin)
+        _CALLER_INPUT_ROUTERS[key] = (caller_stdin, router)
+        return router
+
+
 def resolve_receipt_path(
     transaction_id: str,
     *,
@@ -63,62 +171,6 @@ def create_runner(script: str) -> subprocess.Popen[str]:
         text=True,
         bufsize=1,
     )
-
-
-def _readline_cancellable(
-    caller_stdin: TextIO,
-    closing: threading.Event,
-    *,
-    poll_seconds: float = 0.05,
-) -> str | None:
-    """Read one caller-stdin line while remaining cancellable by transaction close."""
-    try:
-        fd = caller_stdin.fileno()
-    except (AttributeError, OSError, ValueError):
-        if closing.is_set():
-            return None
-        return caller_stdin.readline()
-
-    while not closing.is_set():
-        readable, _, _ = select.select([fd], [], [], poll_seconds)
-        if readable:
-            return caller_stdin.readline()
-    return None
-
-
-def record_and_forward_input(
-    caller_stdin: TextIO,
-    child_stdin: TextIO,
-    recorder: EventRecorder,
-    closing: threading.Event,
-) -> None:
-    """Map transaction-caller stdin to script stdin while recording each event."""
-    try:
-        while not closing.is_set():
-            data = _readline_cancellable(caller_stdin, closing)
-            if data is None or data == "" or closing.is_set():
-                return
-            recorder.record("stdin", "caller_to_script", data)
-            child_stdin.write(data)
-            child_stdin.flush()
-    except (BrokenPipeError, OSError, ValueError):
-        return
-
-
-def record_and_forward_output(
-    child_stream: TextIO,
-    caller_stream: TextIO,
-    stream_name: str,
-    recorder: EventRecorder,
-) -> None:
-    """Map script stdout/stderr to the transaction caller while recording it."""
-    while True:
-        data = child_stream.readline()
-        if data == "":
-            return
-        recorder.record(stream_name, "script_to_caller", data)
-        caller_stream.write(data)
-        caller_stream.flush()
 
 
 def build_receipt(
@@ -225,20 +277,24 @@ def do_transaction(
     assert process.stdout is not None
     assert process.stderr is not None
 
-    closing = threading.Event()
+    bridge = TransactionStreamBridge(recorder)
+    router = _get_caller_input_router(caller_stdin)
+    bridge.attach_outputs(caller_stdout, caller_stderr)
+    router.attach(bridge)
+
     stdin_thread = threading.Thread(
-        target=record_and_forward_input,
-        args=(caller_stdin, process.stdin, recorder, closing),
+        target=bridge.forward_input_to_child,
+        args=(process.stdin,),
         daemon=True,
     )
     stdout_thread = threading.Thread(
-        target=record_and_forward_output,
-        args=(process.stdout, caller_stdout, "stdout", recorder),
+        target=bridge.forward_child_output,
+        args=(process.stdout, "stdout"),
         daemon=True,
     )
     stderr_thread = threading.Thread(
-        target=record_and_forward_output,
-        args=(process.stderr, caller_stderr, "stderr", recorder),
+        target=bridge.forward_child_output,
+        args=(process.stderr, "stderr"),
         daemon=True,
     )
 
@@ -246,13 +302,17 @@ def do_transaction(
     stdout_thread.start()
     stderr_thread.start()
 
-    process.wait()
-    closing.set()
-
     try:
-        process.stdin.close()
-    except (BrokenPipeError, OSError, ValueError):
-        pass
+        process.wait()
+    finally:
+        router.detach(bridge)
+        bridge.detach_outputs()
+        bridge.stop_input()
+
+        try:
+            process.stdin.close()
+        except (BrokenPipeError, OSError, ValueError):
+            pass
 
     _join_stream_worker(stdin_thread, "stdin")
     _join_stream_worker(stdout_thread, "stdout")
