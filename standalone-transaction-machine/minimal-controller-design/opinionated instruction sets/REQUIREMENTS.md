@@ -19,15 +19,13 @@ This document defines the requirements for the opinionated instruction-set calle
 | OIS-013 | The second transaction must execute the extracted generated script as its supplied script. |
 | OIS-014 | The second transaction must write its receipt to the explicit execution receipt path supplied by the caller. |
 | OIS-015 | The caller's knowledge of whether a transaction is interrogation or execution is expressed through which receipt folder/path it supplies; the transaction layer itself is not required to classify receipts by purpose. |
-| OIS-016 | Interrogation and execution receipts are not required to contain explicit parent/child, planning/execution, or receipt-to-receipt linkage metadata. |
-| OIS-017 | If a later consumer needs to associate an interrogation receipt with an execution receipt, it may do so mechanically by comparing the generated script extracted from the interrogation receipt with the exact script recorded as executed in a candidate execution receipt. |
-| OIS-018 | `initial.py` must emit all outbound packets through the same stdout emission function. |
-| OIS-019 | `initial.py` must validate each stdin response against the exact expected shape for its current stage. |
-| OIS-020 | If a received stdin object is invalid, `initial.py` must emit one stdout packet that contains both the validation error and the exact prior request message, then wait for another stdin response for the same stage. |
-| OIS-021 | The final generated-script response must be validated with the same retry behavior and must have the exact shape `{"script":"<script>"}` with a string value. |
-| OIS-022 | After a valid final script response is received, `initial.py` must emit one non-instructional conversational closing message through the normal stdout emission path. |
-| OIS-023 | `initial.py` must perform no further stdin reads or semantic requests after the closing message and must then terminate naturally by reaching the end of the script. |
-| OIS-024 | The caller must rely on completion of `do_transaction(...)` as the boundary indicating that the child script has ended and the transaction receipt has been finalized at the supplied receipt path. |
+| OIS-016 | `initial.py` must emit all outbound packets through the same stdout emission function. |
+| OIS-017 | `initial.py` must validate each stdin response against the exact expected shape for its current stage. |
+| OIS-018 | If a received stdin object is invalid, `initial.py` must emit one stdout packet that contains both the validation error and the exact prior request message, then wait for another stdin response for the same stage. |
+| OIS-019 | The final generated-script response must be validated with the same retry behavior and must have the exact shape `{"script":"<script>"}` with a string value. |
+| OIS-020 | After a valid final script response is received, `initial.py` must emit one non-instructional conversational closing message through the normal stdout emission path. |
+| OIS-021 | `initial.py` must perform no further stdin reads or semantic requests after the closing message and must then terminate naturally by reaching the end of the script. |
+| OIS-022 | The caller must rely on completion of `do_transaction(...)` as the boundary indicating that the child script has ended and the transaction receipt has been finalized at the supplied receipt path. |
 
 ## Intended sequence
 
@@ -43,4 +41,4 @@ read literal initial.py
 → execution ends and execution receipt is finalized
 ```
 
-The receipt folders provide coarse purpose separation. No additional receipt-linkage machinery is required by this instruction set.
+The receipt folders provide coarse purpose separation.
