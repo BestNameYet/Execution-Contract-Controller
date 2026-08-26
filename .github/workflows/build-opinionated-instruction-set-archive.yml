@@ -86,6 +86,10 @@ jobs:
           ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
           ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
         run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin main
+
           python - <<'PY'
           import json
           import os
@@ -109,9 +113,6 @@ jobs:
           )
           PY
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git pull --rebase origin main
           git add opinionated-instruction-sets-archive.json
           if ! git diff --cached --quiet; then
             git commit -m "Update opinionated instruction set archive pointer"
