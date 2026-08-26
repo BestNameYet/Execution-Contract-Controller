@@ -8,6 +8,7 @@ from typing import Any
 
 
 HERE = Path(__file__).resolve().parent
+CLEANSER_PATH = HERE / "cleanser.py"
 INITIAL_PATH = HERE / "initial.py"
 TRANSACTION_LAYER_PATH = HERE.parent / "simplified-transaction-layer" / "transaction_layer.py"
 INTERROGATION_RECEIPT_DIR = HERE / "interrogation-receipts"
@@ -55,8 +56,11 @@ def extract_generated_script(receipt: dict[str, Any]) -> str:
 
 def run() -> dict[str, str]:
     do_transaction = _load_do_transaction()
-    run_id = uuid.uuid4().hex
 
+    cleanser_script = CLEANSER_PATH.read_text(encoding="utf-8")
+    do_transaction(cleanser_script)
+
+    run_id = uuid.uuid4().hex
     interrogation_receipt_path = (
         INTERROGATION_RECEIPT_DIR / f"interrogation_{run_id}.json"
     )
