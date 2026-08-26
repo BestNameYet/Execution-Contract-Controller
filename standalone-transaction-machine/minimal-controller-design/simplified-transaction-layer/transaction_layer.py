@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import subprocess
 import sys
 import threading
@@ -64,6 +65,27 @@ def create_runner(script: str) -> subprocess.Popen[str]:
     )
 
 
+def _readline_cancellable(
+    caller_stdin: TextIO,
+    closing: threading.Event,
+    *,
+    poll_seconds: float = 0.05,
+) -> str | None:
+    """Read one caller-stdin line while remaining cancellable by transaction close."""
+    try:
+        fd = caller_stdin.fileno()
+    except (AttributeError, OSError, ValueError):
+        if closing.is_set():
+            return None
+        return caller_stdin.readline()
+
+    while not closing.is_set():
+        readable, _, _ = select.select([fd], [], [], poll_seconds)
+        if readable:
+            return caller_stdin.readline()
+    return None
+
+
 def record_and_forward_input(
     caller_stdin: TextIO,
     child_stdin: TextIO,
@@ -73,8 +95,8 @@ def record_and_forward_input(
     """Map transaction-caller stdin to script stdin while recording each event."""
     try:
         while not closing.is_set():
-            data = caller_stdin.readline()
-            if data == "" or closing.is_set():
+            data = _readline_cancellable(caller_stdin, closing)
+            if data is None or data == "" or closing.is_set():
                 return
             recorder.record("stdin", "caller_to_script", data)
             child_stdin.write(data)
@@ -151,6 +173,13 @@ def verify_receipt(path: Path, receipt: dict[str, Any]) -> None:
         raise RuntimeError("persisted receipt does not match in-memory receipt")
 
 
+def _join_stream_worker(thread: threading.Thread, name: str) -> None:
+    """Require a transaction-owned stream worker to be gone before return."""
+    thread.join(timeout=1.0)
+    if thread.is_alive():
+        raise RuntimeError(f"transaction {name} worker did not terminate")
+
+
 def do_transaction(
     script: str | None = None,
     *,
@@ -219,13 +248,15 @@ def do_transaction(
 
     process.wait()
     closing.set()
-    stdout_thread.join()
-    stderr_thread.join()
 
     try:
         process.stdin.close()
     except (BrokenPipeError, OSError, ValueError):
         pass
+
+    _join_stream_worker(stdin_thread, "stdin")
+    _join_stream_worker(stdout_thread, "stdout")
+    _join_stream_worker(stderr_thread, "stderr")
 
     receipt = build_receipt(
         transaction_id=transaction_id,
