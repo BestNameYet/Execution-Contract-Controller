@@ -10,13 +10,26 @@ def emit(message: dict[str, Any]) -> None:
     sys.stdout.flush()
 
 
-def receive() -> dict[str, Any]:
+def receive_exact(expected_keys: set[str]) -> dict[str, Any]:
     line = sys.stdin.readline()
     if line == "":
         raise RuntimeError("stdin closed before interrogation completed")
-    value = json.loads(line)
+
+    try:
+        value = json.loads(line)
+    except json.JSONDecodeError as exc:
+        raise TypeError("stdin response must be valid JSON") from exc
+
     if not isinstance(value, dict):
-        raise TypeError("response must be a JSON object")
+        raise TypeError("stdin response must be a JSON object")
+
+    actual_keys = set(value.keys())
+    if actual_keys != expected_keys:
+        raise TypeError(
+            f"stdin response keys must be exactly {sorted(expected_keys)}; "
+            f"received {sorted(actual_keys)}"
+        )
+
     return value
 
 
@@ -33,7 +46,7 @@ def main() -> None:
         }
     )
 
-    question_response = receive()
+    question_response = receive_exact({"q1"})
     q1 = question_response["q1"]
     if not isinstance(q1, list) or not all(isinstance(q, str) for q in q1):
         raise TypeError("q1 must be a JSON array of strings")
@@ -53,7 +66,7 @@ def main() -> None:
             }
         )
 
-        answer_response = receive()
+        answer_response = receive_exact({"answer"})
         answer = answer_response["answer"]
         if not isinstance(answer, str):
             raise TypeError("answer must be a string")
@@ -72,7 +85,7 @@ def main() -> None:
         }
     )
 
-    script_response = receive()
+    script_response = receive_exact({"script"})
     script = script_response["script"]
     if not isinstance(script, str):
         raise TypeError("script must be a string")
