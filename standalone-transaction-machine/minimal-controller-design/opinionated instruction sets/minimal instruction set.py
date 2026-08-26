@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 from typing import Any
 
@@ -24,14 +25,29 @@ def _load_do_transaction():
     return module.do_transaction
 
 
-def run() -> dict[str, Any]:
+def extract_generated_script(receipt: dict[str, Any]) -> str:
+    """Mechanically return the final stdin JSON object's script field."""
+    for event in reversed(receipt["events"]):
+        if event.get("stream") != "stdin":
+            continue
+        try:
+            value = json.loads(event["data"])
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if isinstance(value, dict) and isinstance(value.get("script"), str):
+            return value["script"]
+    raise RuntimeError("generated script was not found in transaction receipt")
+
+
+def run() -> str:
     initial_script = INITIAL_PATH.read_text(encoding="utf-8")
     do_transaction = _load_do_transaction()
-    return do_transaction(
+    receipt = do_transaction(
         initial_script,
         receipt_dir=RECEIPT_DIR,
     )
+    return extract_generated_script(receipt)
 
 
 if __name__ == "__main__":
-    run()
+    print(run())
