@@ -10,66 +10,69 @@ def emit(message: dict[str, Any]) -> None:
     sys.stdout.flush()
 
 
-def emit_shape_error(error: str) -> None:
-    emit({"error": error})
+def _read_json_object() -> tuple[dict[str, Any] | None, str | None]:
+    line = sys.stdin.readline()
+    if line == "":
+        raise RuntimeError("stdin closed before interrogation completed")
+
+    try:
+        value = json.loads(line)
+    except json.JSONDecodeError:
+        return None, "stdin response must be valid JSON"
+
+    if not isinstance(value, dict):
+        return None, "stdin response must be a JSON object"
+
+    return value, None
 
 
-def receive_validated(
+def receive_valid(
     previous_message: dict[str, Any],
-    validator: Callable[[Any], dict[str, Any]],
+    validator: Callable[[dict[str, Any]], str | None],
 ) -> dict[str, Any]:
     while True:
-        line = sys.stdin.readline()
-        if line == "":
-            raise RuntimeError("stdin closed before interrogation completed")
+        value, error = _read_json_object()
+        if error is None and value is not None:
+            error = validator(value)
 
-        try:
-            value = json.loads(line)
-            return validator(value)
-        except (json.JSONDecodeError, TypeError, KeyError) as exc:
-            emit_shape_error(str(exc))
-            emit(previous_message)
+        if error is None and value is not None:
+            return value
 
-
-def require_exact_object(value: Any, expected_key: str) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        raise TypeError("stdin response must be a JSON object")
-
-    actual_keys = set(value.keys())
-    expected_keys = {expected_key}
-    if actual_keys != expected_keys:
-        raise TypeError(
-            f"stdin response keys must be exactly {sorted(expected_keys)}; "
-            f"received {sorted(actual_keys)}"
+        emit(
+            {
+                "error": error,
+                "repeat": previous_message,
+            }
         )
 
-    return value
 
-
-def validate_q1(value: Any) -> dict[str, Any]:
-    value = require_exact_object(value, "q1")
+def validate_q1(value: dict[str, Any]) -> str | None:
+    if set(value.keys()) != {"q1"}:
+        return "stdin response keys must be exactly ['q1']"
     q1 = value["q1"]
     if not isinstance(q1, list) or not all(isinstance(q, str) for q in q1):
-        raise TypeError("q1 must be a JSON array of strings")
-    return value
+        return "q1 must be a JSON array of strings"
+    return None
 
 
-def validate_answer(value: Any) -> dict[str, Any]:
-    value = require_exact_object(value, "answer")
+def validate_answer(value: dict[str, Any]) -> str | None:
+    if set(value.keys()) != {"answer"}:
+        return "stdin response keys must be exactly ['answer']"
     if not isinstance(value["answer"], str):
-        raise TypeError("answer must be a string")
-    return value
+        return "answer must be a string"
+    return None
 
 
-def validate_script(value: Any) -> dict[str, Any]:
-    value = require_exact_object(value, "script")
+def validate_script(value: dict[str, Any]) -> str | None:
+    if set(value.keys()) != {"script"}:
+        return "stdin response keys must be exactly ['script']"
     if not isinstance(value["script"], str):
-        raise TypeError("script must be a string")
-    return value
+        return "script must be a string"
+    return None
 
 
 def main() -> None:
-    question_message = {
+    question_request = {
         "instruction": (
             "Create a list of questions q1 in the domain of the current problem. "
             "Return only the required return schema."
@@ -78,14 +81,14 @@ def main() -> None:
             "q1": ["<question>"]
         },
     }
-    emit(question_message)
+    emit(question_request)
 
-    question_response = receive_validated(question_message, validate_q1)
+    question_response = receive_valid(question_request, validate_q1)
     q1 = question_response["q1"]
 
     qa1: list[dict[str, str]] = []
     for question in q1:
-        answer_message = {
+        answer_request = {
             "instruction": (
                 "Answer the supplied question in the domain of the current problem. "
                 "Return only the required return schema."
@@ -95,12 +98,12 @@ def main() -> None:
                 "answer": "<answer>"
             },
         }
-        emit(answer_message)
+        emit(answer_request)
 
-        answer_response = receive_validated(answer_message, validate_answer)
+        answer_response = receive_valid(answer_request, validate_answer)
         qa1.append({"question": question, "answer": answer_response["answer"]})
 
-    script_message = {
+    script_request = {
         "instruction": (
             "Return a script that solves the current problem. Use qa1 as a context parameter. "
             "Return only the required return schema."
@@ -110,9 +113,9 @@ def main() -> None:
             "script": "<script>"
         },
     }
-    emit(script_message)
+    emit(script_request)
 
-    receive_validated(script_message, validate_script)
+    receive_valid(script_request, validate_script)
 
 
 if __name__ == "__main__":
