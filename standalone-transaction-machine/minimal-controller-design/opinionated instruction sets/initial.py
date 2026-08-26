@@ -80,15 +80,13 @@ def main() -> None:
         "return_schema": {"user_prompt": "<current user prompt>"},
     }
     emit(user_prompt_request)
-    user_prompt_response = receive_valid(user_prompt_request, validate_user_prompt)
-    user_prompt = user_prompt_response["user_prompt"]
+    receive_valid(user_prompt_request, validate_user_prompt)
 
     question_request = {
         "instruction": (
-            "Create a list of questions q1 needed to solve the supplied user prompt. "
+            "Create a list of questions q1 needed to solve the current user prompt. "
             "Return only the required return schema."
         ),
-        "user_prompt": user_prompt,
         "return_schema": {"q1": ["<question>"]},
     }
     emit(question_request)
@@ -100,10 +98,9 @@ def main() -> None:
     for question in q1:
         answer_request = {
             "instruction": (
-                "Answer the supplied question as needed to solve the supplied user prompt. "
+                "Answer the supplied question as needed to solve the current user prompt. "
                 "Return only the required return schema."
             ),
-            "user_prompt": user_prompt,
             "question": question,
             "return_schema": {"answer": "<answer>"},
         }
@@ -114,10 +111,9 @@ def main() -> None:
 
     script_request = {
         "instruction": (
-            "Return a script that solves the supplied user prompt. Use qa1 as a context parameter. "
+            "Return a script that solves the current user prompt. Use qa1 as a context parameter. "
             "Return only the required return schema."
         ),
-        "user_prompt": user_prompt,
         "qa1": qa1,
         "return_schema": {"script": "<script>"},
     }
