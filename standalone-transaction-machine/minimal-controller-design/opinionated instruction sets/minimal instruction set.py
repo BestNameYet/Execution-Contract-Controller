@@ -1,4 +1,6 @@
-"""Minimal instruction set placeholder.
+"""Minimal instruction set.
+
+Dependency: initial.py
 
 Instruction sequence to be defined.
 """
