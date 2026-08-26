@@ -83,10 +83,7 @@ def main() -> None:
     receive_valid(user_prompt_request, validate_user_prompt)
 
     question_request = {
-        "instruction": (
-            "Create a list of questions q1 needed to solve the current user prompt. "
-            "Return only the required return schema."
-        ),
+        "instruction": "Create a list of questions q1 for the interrogation. Return only the required return schema.",
         "return_schema": {"q1": ["<question>"]},
     }
     emit(question_request)
@@ -97,10 +94,7 @@ def main() -> None:
     qa1: list[dict[str, str]] = []
     for question in q1:
         answer_request = {
-            "instruction": (
-                "Answer the supplied question as needed to solve the current user prompt. "
-                "Return only the required return schema."
-            ),
+            "instruction": "Answer the supplied question. Return only the required return schema.",
             "question": question,
             "return_schema": {"answer": "<answer>"},
         }
@@ -110,10 +104,7 @@ def main() -> None:
         qa1.append({"question": question, "answer": answer_response["answer"]})
 
     script_request = {
-        "instruction": (
-            "Return a script that solves the current user prompt. Use qa1 as a context parameter. "
-            "Return only the required return schema."
-        ),
+        "instruction": "Return a script using qa1 as the context parameter. Return only the required return schema.",
         "qa1": qa1,
         "return_schema": {"script": "<script>"},
     }
