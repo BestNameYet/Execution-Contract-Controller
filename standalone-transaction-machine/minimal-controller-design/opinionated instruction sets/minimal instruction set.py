@@ -17,7 +17,7 @@ POST_EXECUTION_PATH = HERE / "post_execution.py"
 INTERROGATION_RECEIPT_DIR = HERE / "interrogation-receipts"
 EXECUTION_RECEIPT_DIR = HERE / "execution-receipts"
 POST_EXECUTION_RECEIPT_DIR = HERE / "post-execution-receipts"
-SOCKET_PATH = Path("/tmp/opinionated-instruction-set.sock")
+SOCKET_PATH = Path("/tmp/minimal instruction set")
 
 
 def _load_transaction_layer():
