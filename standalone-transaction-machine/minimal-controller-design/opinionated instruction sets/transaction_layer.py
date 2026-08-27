@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import select
 import subprocess
 import sys
 import threading
@@ -101,25 +102,48 @@ class CallerInputRouter:
 
     def __init__(self, caller_stdin: TextIO) -> None:
         self._caller_stdin = caller_stdin
-        self._lock = threading.Lock()
+        self._condition = threading.Condition()
         self._active_bridge: TransactionStreamBridge | None = None
+        self._retired = False
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
     def attach(self, bridge: TransactionStreamBridge) -> None:
-        with self._lock:
+        with self._condition:
+            if self._retired:
+                raise RuntimeError("caller stdin router is retired")
             if self._active_bridge is not None:
                 raise RuntimeError("caller stdin already has an active transaction bridge")
             self._active_bridge = bridge
+            self._condition.notify_all()
 
     def detach(self, bridge: TransactionStreamBridge) -> None:
-        with self._lock:
+        with self._condition:
             if self._active_bridge is bridge:
                 self._active_bridge = None
 
+    def retire(self) -> None:
+        with self._condition:
+            self._retired = True
+            self._active_bridge = None
+            self._condition.notify_all()
+        self._thread.join(timeout=1.0)
+        if self._thread.is_alive():
+            raise RuntimeError("caller stdin router did not retire")
+
     def _run(self) -> None:
         while True:
+            with self._condition:
+                while self._active_bridge is None and not self._retired:
+                    self._condition.wait()
+                if self._retired:
+                    return
+                bridge = self._active_bridge
+
             try:
+                ready, _, _ = select.select([self._caller_stdin], [], [], 0.05)
+                if not ready:
+                    continue
                 data = self._caller_stdin.readline()
             except (OSError, ValueError):
                 return
@@ -127,10 +151,16 @@ class CallerInputRouter:
             if data == "":
                 return
 
-            with self._lock:
-                bridge = self._active_bridge
-                if bridge is not None:
-                    bridge.route_caller_input(data)
+            with self._condition:
+                if self._retired:
+                    return
+                # The previous child may exit between select/read and routing,
+                # while the next transaction becomes active. A completed input
+                # line belongs to the bridge active when routing occurs; never
+                # discard it merely because the prior bridge was replaced.
+                active_bridge = self._active_bridge
+                if active_bridge is not None:
+                    active_bridge.route_caller_input(data)
 
 
 _ROUTER_LOCK = threading.Lock()
@@ -148,6 +178,16 @@ def _get_caller_input_router(caller_stdin: TextIO) -> CallerInputRouter:
         router = CallerInputRouter(caller_stdin)
         _CALLER_INPUT_ROUTERS[key] = (caller_stdin, router)
         return router
+
+
+def retire_caller_input_router(caller_stdin: TextIO | None = None) -> None:
+    """Permanently stop this process from routing or reading caller stdin."""
+    stream = sys.stdin if caller_stdin is None else caller_stdin
+    key = id(stream)
+    with _ROUTER_LOCK:
+        existing = _CALLER_INPUT_ROUTERS.pop(key, None)
+    if existing is not None and existing[0] is stream:
+        existing[1].retire()
 
 
 def resolve_receipt_path(

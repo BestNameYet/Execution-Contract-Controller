@@ -27,8 +27,17 @@ This document defines requirements for this particular minimal opinionated instr
 | OIS-021 | `initial.py` must perform no further stdin reads or semantic requests after the closing message and must then terminate naturally by reaching the end of the script. | MET | `initial.py`: the closing `emit(...)` is the final statement in `main()`; control returns naturally and the module ends after `main()` completes. |
 | OIS-022 | The caller must rely on completion of `do_transaction(...)` as the boundary indicating that the child script has ended and the transaction receipt has been finalized at the supplied receipt path. | MET | `minimal instruction set.py`: each synchronous `do_transaction(...)` call completes before the caller proceeds; after the first return the caller immediately reads the supplied receipt path, and after the second return it returns both known receipt paths. |
 | OIS-023 | In this minimal opinionated instruction set, every model-generated question used during its interrogation must be transmitted back to the model verbatim, without rewriting, paraphrasing, prefixing, suffixing, or otherwise changing the question text. | MET | `initial.py`: inside `for question in q1`, the outbound packet is built with `"instruction": question`; the model-generated string is assigned directly to the instruction field without transformation. |
-| OIS-024 | In this minimal opinionated instruction set, the first question sent to the model must ask it to describe the next desired state. | MET | `initial.py`: `main()` first constructs `desired_state_request` with the instruction `Describe the next desired state.` and immediately calls `emit(desired_state_request)` before constructing or emitting `question_request` or any model-generated interrogation question. |
-| OIS-025 | In this minimal opinionated instruction set, the instructions must cause the model to generate a list of interrogation questions and then answer those questions so that the model generates its own context in the domain of the problem, with the objective of reaching the next desired state. | MET | `initial.py`: `question_request` instructs the model to create `q1` to assist a solver in reaching the next desired state; the `for question in q1` loop sends each generated question back to the model and records each answer into `qa1`; `script_request` then supplies `qa1` as the context parameter for script generation. |
+| OIS-024 | The first question of every controller generation must be exactly `Describe your desired state.` | MET | `initial.py`: `desired_state_request` uses that exact instruction and is emitted before every other request. |
+| OIS-025 | The controller must cause the model to generate and answer `q1` so that it creates its own context for reaching the desired state. | MET | `initial.py`: generates `q1`, emits every question verbatim, records `qa1`, and supplies `qa1` for script generation. |
+| OIS-026 | After execution, the controller must ask the model to generate a dense `q2` post-execution questionnaire using the desired state, `qa1`, executed script, and complete execution receipt as context. | MET | `minimal instruction set.py` builds `POST_EXECUTION_CONTEXT`; `post_execution.py` emits the `q2` request with that context. |
+| OIS-027 | A valid `q2` response must contain exactly one key, `q2`, holding 12 through 30 unique nonempty strings. | MET | `post_execution.py`: `validate_q2()` enforces the exact key, cardinality, uniqueness, and item shape. |
+| OIS-028 | Every generated `q2` question must be transmitted back to the model verbatim and paired mechanically with its answer. | MET | `post_execution.py`: iterates the validated list, uses each string directly as `instruction`, validates `answer`, and constructs `qa2`. |
+| OIS-029 | The complete post-execution interaction must be written to a distinct verified receipt. | MET | `minimal instruction set.py`: third `do_transaction(...)` supplies an explicit path under `post-execution-receipts/`. |
+| OIS-030 | After post-execution interrogation completes, the controller must create one successor running the same entry point with inherited stdin, stdout, and stderr. | MET | `minimal instruction set.py`: `launch_successor()` invokes the resolved current entry point with inherited standard streams. |
+| OIS-031 | Before creating the successor, the predecessor must permanently retire and join its sole caller-stdin router so no predecessor thread can consume later input. | MET | `transaction_layer.py`: `retire_caller_input_router()` removes and retires the router; `CallerInputRouter.retire()` joins its thread. |
+| OIS-032 | After creating the successor, the predecessor must close its own stdin, perform no further standard-stream operation, and exit, relinquishing its copies of the inherited streams. | MET | `run()` retires the router before launch, calls `launch_successor()`, closes `sys.stdin`, and returns without emitting a terminal payload. |
+| OIS-033 | No desired state, questionnaire result, or other semantic continuation state may be passed to the successor; each generation gathers its desired state independently. | MET | The successor receives no continuation argument and begins with `initial.py`. |
+| OIS-034 | The controller loop continues by process succession for as long as the active controller remains connected and no external termination or unrecoverable failure stops it. | MET | Every successfully completed generation launches exactly one successor using the same entry point. |
 
 ## Intended sequence
 
@@ -42,6 +51,14 @@ read literal initial.py
 → choose execution receipt path
 → do_transaction(generated script text, execution receipt path)
 → execution ends and execution receipt is finalized
+→ build post-execution context
+→ generate and answer q2
+→ finalize post-execution receipt
+→ retire and join predecessor stdin router
+→ create successor with inherited standard streams
+→ predecessor closes its stdin and exits without further stream activity
+→ successor asks `Describe your desired state.`
+→ repeat
 ```
 
 The receipt folders provide coarse purpose separation.

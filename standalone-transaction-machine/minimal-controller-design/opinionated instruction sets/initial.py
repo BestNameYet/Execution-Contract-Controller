@@ -76,8 +76,8 @@ def validate_script(value: dict[str, Any]) -> str | None:
 
 def main() -> None:
     desired_state_request = {
-        "instruction": "Describe the next desired state.",
-        "return_schema": {"desired_state": "<description of the next desired state>"},
+        "instruction": "Describe your desired state.",
+        "return_schema": {"desired_state": "<description of the desired state>"},
     }
     emit(desired_state_request)
     receive_valid(desired_state_request, validate_desired_state)
@@ -85,7 +85,7 @@ def main() -> None:
     question_request = {
         "instruction": (
             "Create a list of questions q1 that would assist a solver such as yourself in meeting "
-            "the next desired state. Return only the required return schema."
+            "the desired state. Return only the required return schema."
         ),
         "return_schema": {"q1": ["<question>"]},
     }
