@@ -35,45 +35,33 @@ jobs:
               output.write(f"enabled={'true' if enabled else 'false'}\n")
           PY
 
-      - name: Build directory archive
+      - name: Prepare directory artifact metadata
         if: steps.sentinel.outputs.enabled == 'true'
         id: archive
         shell: bash
         run: |
           SOURCE_COMMIT="$GITHUB_SHA"
-          ARCHIVE_FILENAME="opinionated-instruction-sets-${SOURCE_COMMIT}.zip"
           ARTIFACT_NAME="opinionated-instruction-sets-${SOURCE_COMMIT}"
+          ARCHIVE_FILENAME="${ARTIFACT_NAME}.zip"
+          SOURCE_DIRECTORY="standalone-transaction-machine/minimal-controller-design/opinionated instruction sets"
 
-          python - <<'PY'
-          import os
-          from pathlib import Path
-          from zipfile import ZIP_DEFLATED, ZipFile
-
-          source = Path("standalone-transaction-machine/minimal-controller-design/opinionated instruction sets")
-          archive = Path(os.environ["ARCHIVE_FILENAME"])
-
-          if not source.is_dir():
-              raise SystemExit(f"source directory missing: {source}")
-
-          with ZipFile(archive, "w", compression=ZIP_DEFLATED) as zf:
-              for path in sorted(source.rglob("*")):
-                  if path.is_file():
-                      zf.write(path, path.relative_to(source.parent))
-          PY
+          if [ ! -d "$SOURCE_DIRECTORY" ]; then
+            echo "source directory missing: $SOURCE_DIRECTORY" >&2
+            exit 1
+          fi
 
           echo "source_commit=$SOURCE_COMMIT" >> "$GITHUB_OUTPUT"
           echo "archive_filename=$ARCHIVE_FILENAME" >> "$GITHUB_OUTPUT"
           echo "artifact_name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
-        env:
-          ARCHIVE_FILENAME: opinionated-instruction-sets-${{ github.sha }}.zip
+          echo "source_directory=$SOURCE_DIRECTORY" >> "$GITHUB_OUTPUT"
 
-      - name: Upload archive
+      - name: Upload runtime directory as artifact
         if: steps.sentinel.outputs.enabled == 'true'
         id: upload
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.archive.outputs.artifact_name }}
-          path: ${{ steps.archive.outputs.archive_filename }}
+          path: ${{ steps.archive.outputs.source_directory }}
           if-no-files-found: error
 
       - name: Update root archive pointer
