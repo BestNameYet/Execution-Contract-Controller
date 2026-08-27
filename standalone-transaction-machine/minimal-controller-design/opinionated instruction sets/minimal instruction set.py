@@ -3,11 +3,11 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
-import subprocess
+import socket
 import sys
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 
 HERE = Path(__file__).resolve().parent
@@ -17,6 +17,7 @@ POST_EXECUTION_PATH = HERE / "post_execution.py"
 INTERROGATION_RECEIPT_DIR = HERE / "interrogation-receipts"
 EXECUTION_RECEIPT_DIR = HERE / "execution-receipts"
 POST_EXECUTION_RECEIPT_DIR = HERE / "post-execution-receipts"
+SOCKET_PATH = Path("/tmp/opinionated-instruction-set.sock")
 
 
 def _load_transaction_layer():
@@ -105,19 +106,12 @@ def build_post_execution_script(context: dict[str, Any]) -> str:
     )
 
 
-def launch_successor() -> int:
-    process = subprocess.Popen(
-        [sys.executable, str(Path(__file__).resolve())],
-        stdin=None,
-        stdout=None,
-        stderr=None,
-        start_new_session=True,
-        close_fds=True,
-    )
-    return process.pid
-
-
-def run() -> None:
+def run_transaction(
+    *,
+    stdin: TextIO,
+    stdout: TextIO,
+    stderr: TextIO,
+) -> None:
     transaction_layer = _load_transaction_layer()
     do_transaction = transaction_layer.do_transaction
     run_id = uuid.uuid4().hex
@@ -138,6 +132,9 @@ def run() -> None:
     initial_script = INITIAL_PATH.read_text(encoding="utf-8")
     do_transaction(
         initial_script,
+        stdin=stdin,
+        stdout=stdout,
+        stderr=stderr,
         receipt_file=interrogation_receipt_path,
     )
 
@@ -147,6 +144,9 @@ def run() -> None:
 
     do_transaction(
         generated_script,
+        stdin=stdin,
+        stdout=stdout,
+        stderr=stderr,
         receipt_file=execution_receipt_path,
     )
     execution_receipt = read_receipt(execution_receipt_path)
@@ -158,11 +158,67 @@ def run() -> None:
             "execution_receipt": execution_receipt,
         }
     )
-    do_transaction(post_execution_script, receipt_file=post_execution_receipt_path)
-    transaction_layer.retire_caller_input_router(sys.stdin)
-    launch_successor()
-    sys.stdin.close()
+    do_transaction(
+        post_execution_script,
+        stdin=stdin,
+        stdout=stdout,
+        stderr=stderr,
+        receipt_file=post_execution_receipt_path,
+    )
+    transaction_layer.retire_caller_input_router(stdin)
+
+
+def serve() -> None:
+    if SOCKET_PATH.exists():
+        SOCKET_PATH.unlink()
+
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        server.bind(str(SOCKET_PATH))
+        os.chmod(SOCKET_PATH, 0o600)
+        server.listen(1)
+
+        while True:
+            connection, _ = server.accept()
+            try:
+                reader = connection.makefile("r", encoding="utf-8", newline="\n")
+                writer = connection.makefile("w", encoding="utf-8", newline="\n")
+                try:
+                    run_transaction(
+                        stdin=reader,
+                        stdout=writer,
+                        stderr=sys.stderr,
+                    )
+                finally:
+                    writer.flush()
+                    writer.close()
+                    reader.close()
+            except Exception as exc:
+                try:
+                    connection.sendall(
+                        (
+                            json.dumps(
+                                {
+                                    "error": str(exc),
+                                    "error_type": type(exc).__name__,
+                                },
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                            )
+                            + "\n"
+                        ).encode("utf-8")
+                    )
+                except OSError:
+                    pass
+            finally:
+                connection.close()
+    finally:
+        server.close()
+        try:
+            SOCKET_PATH.unlink()
+        except FileNotFoundError:
+            pass
 
 
 if __name__ == "__main__":
-    run()
+    serve()
