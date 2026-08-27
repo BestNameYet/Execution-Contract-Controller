@@ -8,10 +8,8 @@ from typing import Any
 
 
 HERE = Path(__file__).resolve().parent
-CLEANSER_PATH = HERE / "cleanser.py"
 INITIAL_PATH = HERE / "initial.py"
 TRANSACTION_LAYER_PATH = HERE / "transaction_layer.py"
-CLEANSER_RECEIPT_DIR = HERE / "cleanser-receipts"
 INTERROGATION_RECEIPT_DIR = HERE / "interrogation-receipts"
 EXECUTION_RECEIPT_DIR = HERE / "execution-receipts"
 
@@ -44,28 +42,6 @@ def resolve_purpose_receipt_path(directory: Path, filename: str) -> Path:
         return HERE / filename
 
 
-def extract_cleanser_state(receipt: dict[str, Any]) -> bool:
-    events = receipt.get("events")
-    if not isinstance(events, list):
-        raise TypeError("cleanser transaction receipt events must be a list")
-
-    for event in reversed(events):
-        if not isinstance(event, dict) or event.get("stream") != "stdin":
-            continue
-        try:
-            value = json.loads(event["data"])
-        except (KeyError, TypeError, json.JSONDecodeError):
-            continue
-        if (
-            isinstance(value, dict)
-            and set(value.keys()) == {"other_user_generated_control_active"}
-            and isinstance(value["other_user_generated_control_active"], bool)
-        ):
-            return value["other_user_generated_control_active"]
-
-    raise RuntimeError("cleanser state was not found in cleanser transaction receipt")
-
-
 def extract_generated_script(receipt: dict[str, Any]) -> str:
     """Mechanically return the final valid stdin JSON object's script field."""
     events = receipt.get("events")
@@ -88,19 +64,6 @@ def extract_generated_script(receipt: dict[str, Any]) -> str:
 def run() -> dict[str, str]:
     do_transaction = _load_do_transaction()
     run_id = uuid.uuid4().hex
-
-    cleanser_receipt_path = resolve_purpose_receipt_path(
-        CLEANSER_RECEIPT_DIR,
-        f"cleanser_{run_id}.json",
-    )
-    cleanser_script = CLEANSER_PATH.read_text(encoding="utf-8")
-    cleanser_receipt = do_transaction(
-        cleanser_script,
-        receipt_file=cleanser_receipt_path,
-    )
-
-    if extract_cleanser_state(cleanser_receipt):
-        return {"status": "restart_required"}
 
     interrogation_receipt_path = resolve_purpose_receipt_path(
         INTERROGATION_RECEIPT_DIR,

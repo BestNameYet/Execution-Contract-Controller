@@ -41,11 +41,11 @@ def receive_valid(
         emit({"error": error, "repeat": previous_message})
 
 
-def validate_user_prompt(value: dict[str, Any]) -> str | None:
-    if set(value.keys()) != {"user_prompt"}:
-        return "stdin response keys must be exactly ['user_prompt']"
-    if not isinstance(value["user_prompt"], str):
-        return "user_prompt must be a string"
+def validate_desired_state(value: dict[str, Any]) -> str | None:
+    if set(value.keys()) != {"desired_state"}:
+        return "stdin response keys must be exactly ['desired_state']"
+    if not isinstance(value["desired_state"], str):
+        return "desired_state must be a string"
     return None
 
 
@@ -75,17 +75,17 @@ def validate_script(value: dict[str, Any]) -> str | None:
 
 
 def main() -> None:
-    user_prompt_request = {
-        "instruction": "Return the current user prompt exactly. Return only the required return schema.",
-        "return_schema": {"user_prompt": "<current user prompt>"},
+    desired_state_request = {
+        "instruction": "Describe the next desired state.",
+        "return_schema": {"desired_state": "<description of the next desired state>"},
     }
-    emit(user_prompt_request)
-    receive_valid(user_prompt_request, validate_user_prompt)
+    emit(desired_state_request)
+    receive_valid(desired_state_request, validate_desired_state)
 
     question_request = {
         "instruction": (
             "Create a list of questions q1 that would assist a solver such as yourself in meeting "
-            "the objectives described in the user prompt. Return only the required return schema."
+            "the next desired state. Return only the required return schema."
         ),
         "return_schema": {"q1": ["<question>"]},
     }
