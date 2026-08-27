@@ -33,6 +33,15 @@ def _load_transaction_layer():
     return module
 
 
+# Materialize the runtime into this process exactly once. These objects remain
+# resident for the lifetime of the controller process and are reused for every
+# later socket reconnection.
+TRANSACTION_LAYER = _load_transaction_layer()
+DO_TRANSACTION = TRANSACTION_LAYER.do_transaction
+INITIAL_SCRIPT = INITIAL_PATH.read_text(encoding="utf-8")
+POST_EXECUTION_SCRIPT = POST_EXECUTION_PATH.read_text(encoding="utf-8")
+
+
 def read_receipt(receipt_path: Path) -> dict[str, Any]:
     value = json.loads(receipt_path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
@@ -102,7 +111,7 @@ def build_post_execution_script(context: dict[str, Any]) -> str:
     return (
         "import json\n"
         f"POST_EXECUTION_CONTEXT = json.loads({context_json!r})\n"
-        + POST_EXECUTION_PATH.read_text(encoding="utf-8")
+        + POST_EXECUTION_SCRIPT
     )
 
 
@@ -112,8 +121,6 @@ def run_transaction(
     stdout: TextIO,
     stderr: TextIO,
 ) -> None:
-    transaction_layer = _load_transaction_layer()
-    do_transaction = transaction_layer.do_transaction
     run_id = uuid.uuid4().hex
 
     interrogation_receipt_path = resolve_purpose_receipt_path(
@@ -129,9 +136,8 @@ def run_transaction(
         f"post_execution_{run_id}.json",
     )
 
-    initial_script = INITIAL_PATH.read_text(encoding="utf-8")
-    do_transaction(
-        initial_script,
+    DO_TRANSACTION(
+        INITIAL_SCRIPT,
         stdin=stdin,
         stdout=stdout,
         stderr=stderr,
@@ -142,7 +148,7 @@ def run_transaction(
     generated_script = extract_generated_script(interrogation_receipt)
     desired_state, qa1 = extract_interrogation_context(interrogation_receipt)
 
-    do_transaction(
+    DO_TRANSACTION(
         generated_script,
         stdin=stdin,
         stdout=stdout,
@@ -158,14 +164,14 @@ def run_transaction(
             "execution_receipt": execution_receipt,
         }
     )
-    do_transaction(
+    DO_TRANSACTION(
         post_execution_script,
         stdin=stdin,
         stdout=stdout,
         stderr=stderr,
         receipt_file=post_execution_receipt_path,
     )
-    transaction_layer.retire_caller_input_router(stdin)
+    TRANSACTION_LAYER.retire_caller_input_router(stdin)
 
 
 def serve() -> None:
@@ -178,6 +184,9 @@ def serve() -> None:
         os.chmod(SOCKET_PATH, 0o600)
         server.listen(1)
 
+        # The controller process remains alive indefinitely. Connections may
+        # disappear and later models may reconnect without recreating this
+        # process or rematerializing its runtime dependencies.
         while True:
             connection, _ = server.accept()
             try:
