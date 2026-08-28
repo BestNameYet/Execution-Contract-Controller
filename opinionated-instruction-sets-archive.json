@@ -1,10 +1,10 @@
 {
-  "archive_filename": "opinionated-instruction-sets-6f0dcdf80398821813b369abf432f3fcd0472a23.zip",
-  "artifact_id": "9700404678",
-  "artifact_name": "opinionated-instruction-sets-6f0dcdf80398821813b369abf432f3fcd0472a23",
-  "artifact_url": "https://github.com/BestNameYet/Execution-Contract-Controller/actions/runs/33207930449/artifacts/9700404678",
+  "archive_filename": "opinionated-instruction-sets-ed13d83291ab6ea024cf3e1edf2ddf3778ace9be.zip",
+  "artifact_id": "9700532384",
+  "artifact_name": "opinionated-instruction-sets-ed13d83291ab6ea024cf3e1edf2ddf3778ace9be",
+  "artifact_url": "https://github.com/BestNameYet/Execution-Contract-Controller/actions/runs/33208254500/artifacts/9700532384",
   "sentinel": true,
-  "source_commit": "6f0dcdf80398821813b369abf432f3fcd0472a23",
+  "source_commit": "ed13d83291ab6ea024cf3e1edf2ddf3778ace9be",
   "source_directory": "standalone-transaction-machine/minimal-controller-design/opinionated instruction sets",
-  "workflow_run_id": "33207930449"
+  "workflow_run_id": "33208254500"
 }
