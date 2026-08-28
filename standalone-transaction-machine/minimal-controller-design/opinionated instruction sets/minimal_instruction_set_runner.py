@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import sys
 from pathlib import Path
 from typing import Any, NoReturn
@@ -13,6 +14,7 @@ MANIFEST_SCHEMA = "minimal-instruction-set-runtime-manifest-v1"
 CONTROLLER_ID = "minimal-instruction-set"
 CANONICAL_AUTHORITY = "/Control_Authorities/CONTROL_REGISTRY.md"
 DEPENDENCY_ROLES = ("initial", "post_execution", "transaction_layer")
+REQUIRED_CAPABILITY = "af_unix_stream_socket_in_tmp"
 
 
 def fail_preflight(
@@ -88,6 +90,11 @@ def validate_runtime_unit(manifest: dict[str, Any]) -> Path:
             "invalid_runtime_manifest",
             detail="canonical_installation_authority does not match the runner authority",
         )
+    if manifest.get("required_capabilities") != [REQUIRED_CAPABILITY]:
+        fail_preflight(
+            "invalid_runtime_manifest",
+            detail=f"required_capabilities must equal {[REQUIRED_CAPABILITY]}",
+        )
 
     runner_name = require_local_filename(manifest.get("runner"), "runner")
     if runner_name != Path(__file__).name:
@@ -121,6 +128,26 @@ def validate_runtime_unit(manifest: dict[str, Any]) -> Path:
             "missing_runtime_dependencies",
             missing_files=missing,
         )
+
+    probe_path = Path("/tmp") / f".{CONTROLLER_ID}.runner-probe-{os.getpid()}"
+    probe: socket.socket | None = None
+    try:
+        probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        probe.bind(str(probe_path))
+    except OSError as exc:
+        fail_preflight(
+            "unavailable_runtime_capability",
+            detail=f"{REQUIRED_CAPABILITY}: [errno {exc.errno}] {exc}",
+        )
+    finally:
+        if probe is not None:
+            probe.close()
+        try:
+            probe_path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
 
     return HERE / entry_point
 
