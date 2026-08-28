@@ -8,5 +8,8 @@
     "post_execution": "post_execution.py",
     "transaction_layer": "transaction_layer.py"
   },
+  "required_capabilities": [
+    "af_unix_stream_socket_in_tmp"
+  ],
   "canonical_installation_authority": "/Control_Authorities/CONTROL_REGISTRY.md"
 }
