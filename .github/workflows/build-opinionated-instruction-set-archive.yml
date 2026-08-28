@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - 'standalone-transaction-machine/minimal-controller-design/opinionated instruction sets/**'
+      - '.github/workflows/build-opinionated-instruction-set-archive.yml'
   workflow_dispatch:
 
 permissions:
@@ -54,6 +55,49 @@ jobs:
           echo "archive_filename=$ARCHIVE_FILENAME" >> "$GITHUB_OUTPUT"
           echo "artifact_name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
           echo "source_directory=$SOURCE_DIRECTORY" >> "$GITHUB_OUTPUT"
+
+      - name: Validate flat runtime artifact layout
+        if: steps.sentinel.outputs.enabled == 'true'
+        shell: bash
+        env:
+          SOURCE_DIRECTORY: ${{ steps.archive.outputs.source_directory }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          source = Path(os.environ["SOURCE_DIRECTORY"])
+          manifest_path = source / "runtime-manifest.json"
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+          dependencies = manifest.get("dependencies")
+          if not isinstance(dependencies, dict) or not dependencies:
+              raise SystemExit("runtime manifest dependencies must be a nonempty object")
+
+          names = [
+              "runtime-manifest.json",
+              manifest.get("runner"),
+              manifest.get("entry_point"),
+              *dependencies.values(),
+          ]
+          for name in names:
+              if not isinstance(name, str) or not name or Path(name).name != name:
+                  raise SystemExit(f"runtime artifact member must be one root filename: {name!r}")
+              if not (source / name).is_file():
+                  raise SystemExit(f"required runtime artifact member is missing: {name}")
+
+          nested_files = sorted(
+              str(path.relative_to(source))
+              for path in source.rglob("*")
+              if path.is_file() and path.parent != source
+          )
+          if nested_files:
+              raise SystemExit(
+                  "runtime artifact must be flat at its root; nested files: "
+                  + ", ".join(nested_files)
+              )
+          PY
 
       - name: Upload runtime directory as artifact
         if: steps.sentinel.outputs.enabled == 'true'
