@@ -1,0 +1,12 @@
+{
+  "schema": "minimal-instruction-set-runtime-manifest-v1",
+  "controller_id": "minimal-instruction-set",
+  "runner": "minimal_instruction_set_runner.py",
+  "entry_point": "minimal instruction set.py",
+  "dependencies": {
+    "initial": "initial.py",
+    "post_execution": "post_execution.py",
+    "transaction_layer": "transaction_layer.py"
+  },
+  "canonical_installation_authority": "/Control_Authorities/CONTROL_REGISTRY.md"
+}
