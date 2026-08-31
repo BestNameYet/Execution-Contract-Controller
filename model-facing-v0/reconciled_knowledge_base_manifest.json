@@ -1,0 +1,46 @@
+{
+  "schema": "reconciled-knowledge-base-manifest-v1",
+  "version": 1,
+  "canonical_kb": {
+    "path": "model-facing-v0/reconciled_knowledge_base.json",
+    "blob_sha": "857fac9b41cc5b47c5a03b33adf5f7b7d3e8da97",
+    "basis": "Exact byte-for-byte copy of the richer model-facing knowledge_base.json after source reconciliation."
+  },
+  "sources": [
+    {
+      "path": "model-facing-v0/knowledge_base.json",
+      "schema": "knowledge-base-v1",
+      "version": 3,
+      "blob_sha": "857fac9b41cc5b47c5a03b33adf5f7b7d3e8da97",
+      "role": "canonical_rich_superset"
+    },
+    {
+      "path": "model-facing-v0/execution_knowledge_base.json",
+      "schema": "execution-knowledge-base-v1",
+      "version": 2,
+      "blob_sha": "c1bc59368b0521aae278c1f955b6fe4f5526c4c8",
+      "role": "compact_execution_projection"
+    },
+    {
+      "path": "runtime-source/execution_knowledge_base.json",
+      "role": "duplicate_runtime_copy_of_execution_projection",
+      "note": "Receipts identified this as the same Git blob as model-facing-v0/execution_knowledge_base.json; it is provenance-only and is not duplicated in the canonical KB."
+    },
+    {
+      "path": "model-facing-v0/model_facing_context_kb.json",
+      "schema": "model-facing-context-kb-v1",
+      "version": 4,
+      "blob_sha": "1b932d6913b2f1aa26a415f38cf989c7fbe587df",
+      "role": "context_instruction_projection"
+    }
+  ],
+  "reconciliation": {
+    "identity_rule": "Canonical record ID governs duplicate identity when IDs match.",
+    "field_rule": "For duplicate IDs, retain the richest canonical record; do not duplicate compact projections that omit fields already present in the richer record.",
+    "semantic_duplicate_rule": "Records with the same canonical ID and same semantic responsibility are one canonical entry even when a source projection is shorter.",
+    "top_level_metadata_rule": "Source schema, version, purpose, path, and blob identity are preserved in this manifest rather than duplicated into KB records.",
+    "context_result": "Every entry in model_facing_context_kb.json is represented by the corresponding richer context.* record in knowledge_base.json.",
+    "execution_result": "The execution KB is a compact projection of records represented in the richer model-facing KB; the richer records preserve additional requirements, required_output_schema, example procedures, and other fields where present.",
+    "duplication_policy": "No duplicate canonical records are intentionally emitted."
+  }
+}
